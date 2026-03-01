@@ -10,10 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"context"
+
+	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq" // PostgreSQL driver
-	"github.com/go-redis/redis/v8"
-	"context"
 )
 
 // --- Configuration ---

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { TrendingUp, TrendingDown, Activity, Zap } from 'lucide-react';
+import TradingViewWidget from './TradingViewWidget';
 
 interface MarketIntelligence {
   symbol: string;
@@ -149,6 +150,10 @@ export const MarketIntelligenceCanvas = ({ symbol, timeframe = '1h' }: { symbol:
 
   return (
     <div className="bg-linear-to-br from-gray-800/60 to-gray-900/60 border border-gray-700 rounded-lg p-6 space-y-6">
+      {/* TradingView Chart */}
+      <div className="w-full">
+        <TradingViewWidget symbol={symbol} interval={timeframe} />
+      </div>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

@@ -204,7 +204,18 @@ export const OrderFlowHeatmap = ({ symbol = 'BBCA' }: { symbol: string }) => {
     <div className="w-full space-y-6 bg-gray-800/50 border border-gray-700 rounded-lg p-6">
       {/* Heatmap Canvas */}
       <div className="space-y-2">
-        <h3 className="text-lg font-semibold text-white">Market Depth Heatmap</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-white">Market Depth Heatmap</h3>
+          <label className="inline-flex items-center space-x-2 text-sm">
+            <input
+              type="checkbox"
+              checked={aggregate}
+              onChange={() => setAggregate(!aggregate)}
+              className="form-checkbox h-4 w-4 text-cyan-400"
+            />
+            <span className="text-gray-300">1‑min Aggregated</span>
+          </label>
+        </div>
         <canvas
           ref={canvasRef}
           width={800}

@@ -41,7 +41,7 @@
 ### Next Phase 🔄 (Phase 2)
 - [x] Deep CNN Technical Pattern Detection (training pipeline available)
 - [ ] Order Flow Heatmap visualization
-- [ ] Real-time chart integration (TradingView)
+- [x] Real-time chart integration (TradingView)
 - [ ] Advanced Screener (Daytrade + Swing modes)
 - [x] Telegram notification system
 - [x] Backtesting engine
@@ -357,7 +357,7 @@ const (
 
 ## 🚧 Known Limitations
 
-- Frontend chart rendering still uses placeholder (TradingView integration pending)
+- Frontend chart rendering now embeds live TradingView widget
 - Backtesting engine not yet implemented
  - Order flow heatmap visualization now implemented with real data
 - Telegram integration pending

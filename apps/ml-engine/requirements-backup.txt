@@ -17,3 +17,4 @@ ta
 scipy
 apscheduler
 redis
+pytest
