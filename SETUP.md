@@ -355,7 +355,7 @@ const (
 
 - Frontend chart rendering still uses placeholder (TradingView integration pending)
 - Backtesting engine not yet implemented
-- Order flow heatmap visualization needs enhancement
+ - Order flow heatmap visualization now implemented with real data
 - Telegram integration pending
 - Deep CNN model training pending
 

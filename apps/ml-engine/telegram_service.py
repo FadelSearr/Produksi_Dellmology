@@ -182,6 +182,34 @@ async def api_cnn_train(
     return JSONResponse({'success': True, 'message': f'Training started for {symbol}'})
 
 
+@app.post("/xai/explain")
+async def api_xai_explain(
+    payload: dict,
+    authorization: Optional[str] = Header(None)
+):
+    """Generate an XAI explanation for the latest window of a symbol."""
+    if not await verify_auth(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    symbol = payload.get('symbol')
+    top_k = int(payload.get('top_k', 10))
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    try:
+        from xai_explainer import explain_symbol
+        from predict import connect_to_db
+
+        engine = connect_to_db()
+        result = explain_symbol(symbol, engine, top_k=top_k)
+        return JSONResponse({'success': True, 'explanation': result})
+    except FileNotFoundError as fe:
+        raise HTTPException(status_code=500, detail=str(fe))
+    except Exception as e:
+        logger.error(f"XAI explanation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/telegram/history")
 async def get_alert_history(
     symbol: Optional[str] = None,

@@ -158,7 +158,7 @@ Implemented complete Phase 1 backend infrastructure and frontend UI for Dellmolo
 - **Broker List**: Top 10 brokers with net buy/sell values
 - **Filters**: All, Whale, Retail, Smart Money modes
 - **Timeline Switching**: 1D, 7D, 14D, 21D periods
-- **Mini Heatmap**: 7-day accumulation/distribution pattern
+  - **Mini Heatmap**: 7-day accumulation/distribution pattern (now powered by real daily_heatmap data from broker summaries)
 - **Z-Score Display**: Anomaly detection visualization
 - **Wash Sale Alert**: High-risk wash sale score indicator
 - **Consistency Score**: Broker activity reliability metric

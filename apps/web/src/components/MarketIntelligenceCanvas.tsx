@@ -194,6 +194,31 @@ export const MarketIntelligenceCanvas = ({ symbol, timeframe = '1h' }: { symbol:
               </span>
             </div>
           )}
+          <button
+            onClick={async () => {
+              // toggle simple fetch and show explanation below by updating state
+              try {
+                setLoading(true)
+                const r = await fetch('/api/xai', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ symbol, top_k: 8 }),
+                })
+                if (!r.ok) throw new Error('XAI request failed')
+                const j = await r.json()
+                // attach the explanation to data so we can render XAIReport inline
+                (data as any).xai = j.explanation
+                setData({ ...(data as any) })
+              } catch (e) {
+                console.error('XAI fetch failed', e)
+              } finally {
+                setLoading(false)
+              }
+            }}
+            className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 rounded text-xs"
+          >
+            🧭 Explain
+          </button>
         </div>
       </div>
 
@@ -308,6 +333,31 @@ export const MarketIntelligenceCanvas = ({ symbol, timeframe = '1h' }: { symbol:
           {ups.signal === 'NEUTRAL' && '🟡 Pasar seimbang. Tunggu breakout.'}
         </p>
       </div>
+      {/* XAI Explanation (if available) */}
+      {data && (data as any).xai && (
+        <div>
+          <h3 className="text-sm text-gray-300 mb-2">Model Explainability</h3>
+          <div className="grid grid-cols-1 gap-2">
+            <div className="col-span-1">
+              {/* Inline render of XAI summary */}
+              <div className="bg-gray-900/40 border border-gray-700 rounded p-3 text-sm">
+                <div className="flex justify-between mb-2">
+                  <div className="font-medium">Top contributors</div>
+                  <div className="text-xs text-gray-400">Up prob: {(data as any).xai.base_prob_up ? ((data as any).xai.base_prob_up*100).toFixed(1) : 'N/A'}%</div>
+                </div>
+                <ul className="text-xs space-y-1">
+                  {(data as any).xai.top_features.map((t: any, i: number) => (
+                    <li key={i} className="flex justify-between">
+                      <span>{t.feature} (d-{t.day_index})</span>
+                      <span className="font-mono">{t.importance.toFixed(4)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
