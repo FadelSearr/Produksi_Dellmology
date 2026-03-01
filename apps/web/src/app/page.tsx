@@ -1,28 +1,26 @@
 'use client';
 
-import { CommandBar } from "@/components/CommandBar";
-import { BrokerFlow } from "@/components/BrokerFlow";
-import { RealtimeTrades } from "@/components/RealtimeTrades";
-import { AIScreener } from "@/components/AIScreener";
-import { AdvancedScreener } from "@/components/AdvancedScreener";
-import { PredictionBadge } from "@/components/PredictionBadge";
-import { MarketIntelligenceCanvas } from "@/components/MarketIntelligenceCanvas";
-import { OrderFlowHeatmap } from "@/components/OrderFlowHeatmap";
-import { CnnPatternDetector } from "@/components/CnnPatternDetector";
-import DataValidationStatus from "@/components/DataValidationStatus";
-import { FlowEngine } from "@/components/FlowEngine";
-import { GlobalCorrelationMarquee } from "@/components/GlobalCorrelationMarquee";
-import { SystemHealthIndicators } from "@/components/SystemHealthIndicators";
-import { AINarrativeDisplay } from "@/components/AINarrativeDisplay";
-import TelegramSettings from "@/components/TelegramSettings";
-import RetrainStatusWidget from "@/components/RetrainStatusWidget";
-import EnhancedModelPerformanceMetrics from "@/components/EnhancedModelPerformanceMetrics";
-import ModelMetricsHistory from "@/components/ModelMetricsHistory";
-import ModelAlertThresholds from "@/components/ModelAlertThresholds";
-import CompareModelMetrics from "@/components/CompareModelMetrics";
+import { CommandBar } from "@/components/layout/CommandBar";
+import { RealtimeTrades } from "@/components/monitoring/RealtimeTrades";
+import { AIScreener } from "@/components/intelligence/AIScreener";
+import { AdvancedScreener } from "@/components/analysis/AdvancedScreener";
+import { MarketIntelligenceCanvas } from "@/components/dashboard/MarketIntelligenceCanvas";
+import { OrderFlowHeatmap } from "@/components/dashboard/OrderFlowHeatmap";
+import { CnnPatternDetector } from "@/components/analysis/CnnPatternDetector";
+import DataValidationStatus from "@/components/metrics/DataValidationStatus";
+import { FlowEngine } from "@/components/dashboard/FlowEngine";
+import { GlobalCorrelationMarquee } from "@/components/dashboard/GlobalCorrelationMarquee";
+import { SystemHealthIndicators } from "@/components/monitoring/SystemHealthIndicators";
+import { AINarrativeDisplay } from "@/components/intelligence/AINarrativeDisplay";
+import TelegramSettings from "@/components/settings/TelegramSettings";
+import RetrainStatusWidget from "@/components/monitoring/RetrainStatusWidget";
+import EnhancedModelPerformanceMetrics from "@/components/metrics/EnhancedModelPerformanceMetrics";
+import ModelMetricsHistory from "@/components/metrics/ModelMetricsHistory";
+import ModelAlertThresholds from "@/components/metrics/ModelAlertThresholds";
+import CompareModelMetrics from "@/components/metrics/CompareModelMetrics";
 import { ProcessedTrade } from "@/types/global";
 import { useEffect, useState } from "react";
-import BacktestRunner from "@/components/BacktestRunner";  // new component import
+import BacktestRunner from "@/components/dashboard/BacktestRunner";  // new component import
 
 const MAX_TRADES_IN_LIST = 50;
 const STREAM_URL = "http://localhost:8080/stream";
@@ -30,7 +28,7 @@ const STREAM_URL = "http://localhost:8080/stream";
 export default function Home() {
   const [trades, setTrades] = useState<ProcessedTrade[]>([]);
   const [isConnected, setIsConnected] = useState(false);
-  const [activeSymbol, setActiveSymbol] = useState("BBCA"); // Add state for the active symbol
+  const [activeSymbol] = useState("BBCA"); // Add state for the active symbol
 
   useEffect(() => {
     const eventSource = new EventSource(STREAM_URL);

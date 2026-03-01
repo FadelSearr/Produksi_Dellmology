@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { AdvancedScreener } from '../AdvancedScreener';
+import { AdvancedScreener } from '../analysis/AdvancedScreener';
 
 global.fetch = jest.fn(() =>
   Promise.resolve({

@@ -1,6 +1,6 @@
 import 'jest-canvas-mock';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { OrderFlowHeatmap } from '../OrderFlowHeatmap';
+import { OrderFlowHeatmap } from '../dashboard/OrderFlowHeatmap';
 
 // Mock fetch
 global.fetch = jest.fn(() =>

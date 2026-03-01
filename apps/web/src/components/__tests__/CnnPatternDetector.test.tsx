@@ -1,5 +1,6 @@
-import { render, screen } from '@testing-library/react';
-import { CnnPatternDetector } from '../CnnPatternDetector';
+import 'jest-canvas-mock';
+import { render, screen, waitFor } from '@testing-library/react';
+import { CnnPatternDetector } from '../analysis/CnnPatternDetector';
 
 global.fetch = jest.fn(() =>
   Promise.resolve({
@@ -13,8 +14,11 @@ global.fetch = jest.fn(() =>
 ) as jest.Mock;
 
 describe('CnnPatternDetector', () => {
-  it('renders title', async () => {
+  it('renders and handles empty results', async () => {
     render(<CnnPatternDetector symbol="TEST" />);
-    expect(await screen.findByText('Detected Patterns')).toBeInTheDocument();
+    // Wait for the component to finish loading and display the empty state
+    await waitFor(() => {
+      expect(screen.getByText(/No patterns detected for/i)).toBeInTheDocument();
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import TradingViewWidget from '../TradingViewWidget';
+import TradingViewWidget from '../dashboard/TradingViewWidget';
 
 describe('TradingViewWidget', () => {
   it('renders container div with correct id', () => {

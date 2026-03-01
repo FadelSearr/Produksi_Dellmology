@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import BacktestRunner from '../BacktestRunner';
+import BacktestRunner from '../dashboard/BacktestRunner';
 
 global.fetch = jest.fn(() =>
   Promise.resolve({
