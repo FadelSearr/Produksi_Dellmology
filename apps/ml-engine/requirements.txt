@@ -1,0 +1,6 @@
+pandas
+numpy
+yfinance
+psycopg2-binary
+sqlalchemy
+tensorflow<2.0
