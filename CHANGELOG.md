@@ -110,6 +110,19 @@ Implemented complete Phase 1 backend infrastructure and frontend UI for Dellmolo
 - Mock historical data generation
 - 300+ lines of functional testing code
 
+#### 8. **CNN Model Pipeline** (`apps/ml-engine`)
+- `feature_generator.py`: converts daily_prices into normalized 128‑day windows + labels
+- `model.py`: TensorFlow 1.x CNN architecture adapted from reference project
+- `train.py`: training script with checkpoint saving and accuracy logging
+- `predict.py`: inference script now supports real model and stores predictions
+  - Automatically falls back to mock when checkpoint missing
+- `CNN_TRAINING.md`: guide with step‑by‑step instructions
+- ML engine endpoints `/cnn/train` & `/cnn/predict` added in `telegram_service.py`
+- Frontend fetch to `/api/prediction` and badge display in Market Intelligence Canvas
+- Database schema updated with `cnn_predictions` table (seeded in init SQL)
+- `requirements.txt` updated with TensorFlow and ML dependencies
+
+---
 #### 8. **Advanced Chart Component** (`apps/web/src/components/AdvancedChart.tsx`)
 - Lightweight-charts integration (TradingView alternative)
 - Candlestick chart with OHLCV data

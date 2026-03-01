@@ -39,12 +39,12 @@
   - ✅ Market analysis templates
 
 ### Next Phase 🔄 (Phase 2)
-- [ ] Deep CNN Technical Pattern Detection
+- [x] Deep CNN Technical Pattern Detection (training pipeline available)
 - [ ] Order Flow Heatmap visualization
 - [ ] Real-time chart integration (TradingView)
 - [ ] Advanced Screener (Daytrade + Swing modes)
-- [ ] Telegram notification system
-- [ ] Backtesting engine
+- [x] Telegram notification system
+- [x] Backtesting engine
 - [ ] Explainable AI (XAI) reports
 
 ---
