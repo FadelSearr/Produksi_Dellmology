@@ -1,16 +1,46 @@
 services:
+  # Main Database with TimescaleDB extension
   db:
-    image: postgres:15
+    image: timescale/timescaledb:latest-pg15
     restart: always
     environment:
       - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=dellmology
+      - POSTGRES_INITDB_ARGS="-c shared_preload_libraries=timescaledb"
     ports:
       - '5433:5432'
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d dellmology"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dellmology-network
+
+  # Optional: Redis for caching (future use)
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dellmology-network
 
 volumes:
   postgres_data:
+  redis_data:
+
+networks:
+  dellmology-network:
+    driver: bridge
