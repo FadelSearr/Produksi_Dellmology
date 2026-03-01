@@ -4,8 +4,11 @@ import { CommandBar } from "@/components/CommandBar";
 import { BrokerFlow } from "@/components/BrokerFlow";
 import { RealtimeTrades } from "@/components/RealtimeTrades";
 import { AIScreener } from "@/components/AIScreener";
+import { AdvancedScreener } from "@/components/AdvancedScreener";
 import { PredictionBadge } from "@/components/PredictionBadge";
 import { MarketIntelligenceCanvas } from "@/components/MarketIntelligenceCanvas";
+import { OrderFlowHeatmap } from "@/components/OrderFlowHeatmap";
+import { CnnPatternDetector } from "@/components/CnnPatternDetector";
 import { FlowEngine } from "@/components/FlowEngine";
 import { GlobalCorrelationMarquee } from "@/components/GlobalCorrelationMarquee";
 import { SystemHealthIndicators } from "@/components/SystemHealthIndicators";
@@ -15,6 +18,7 @@ import RetrainStatusWidget from "@/components/RetrainStatusWidget";
 import EnhancedModelPerformanceMetrics from "@/components/EnhancedModelPerformanceMetrics";
 import ModelMetricsHistory from "@/components/ModelMetricsHistory";
 import ModelAlertThresholds from "@/components/ModelAlertThresholds";
+import CompareModelMetrics from "@/components/CompareModelMetrics";
 import { ProcessedTrade } from "@/types/global";
 import { useEffect, useState } from "react";
 
@@ -79,6 +83,24 @@ export default function Home() {
               <SystemHealthIndicators />
             </div>
             <MarketIntelligenceCanvas symbol={activeSymbol} timeframe="1h" />
+          </section>
+
+          {/* Market Depth & Order Flow Heatmap */}
+          <section className="space-y-4">
+            <h2 className="text-2xl font-bold">💧 Order Flow Heatmap & Market Depth</h2>
+            <OrderFlowHeatmap symbol={activeSymbol} />
+          </section>
+
+          {/* CNN Pattern Recognition */}
+          <section className="space-y-4">
+            <h2 className="text-2xl font-bold">🔍 CNN Technical Pattern Detection</h2>
+            <CnnPatternDetector symbol={activeSymbol} />
+          </section>
+
+          {/* Advanced Multi-Factor AI Screener */}
+          <section className="space-y-4">
+            <h2 className="text-2xl font-bold">🚀 Advanced AI Screener (Multi-Factor)</h2>
+            <AdvancedScreener />
           </section>
 
           {/* SECTION 2: The Flow Engine (Bandarmology Hub) */}

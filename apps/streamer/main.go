@@ -260,6 +260,15 @@ func processMessage(rawMsg []byte) {
 		quotesMutex.Lock()
 		latestQuotes[quote.Symbol] = quote
 		quotesMutex.Unlock()
+
+	case "depth":
+		var depth DepthData
+		if err := json.Unmarshal(msg.Data, &depth); err != nil {
+			log.Printf("WARN: Failed to parse depth data: %v", err)
+			return
+		}
+		// Process order flow analysis asynchronously
+		go processDepthData(depth)
 	}
 }
 
