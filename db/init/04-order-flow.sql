@@ -1,65 +1,127 @@
--- Order Flow Heatmap Schema
--- Stores real-time bid/offer queue depth for order flow analysis
+-- Order Flow Heatmap & Anomaly Detection Schema
+-- TimescaleDB extension for time-series data
 
-CREATE TABLE IF NOT EXISTS order_book (
-  id BIGSERIAL,
-  timestamp TIMESTAMPTZ NOT NULL,
-  symbol VARCHAR(10) NOT NULL,
-  level_index INT NOT NULL, -- Position in order book (0=top, 1=2nd, etc)
-  side VARCHAR(3) NOT NULL, -- 'BID' or 'ASK'
-  price DECIMAL NOT NULL,
-  volume BIGINT NOT NULL,
-  cumulative_volume BIGINT NOT NULL -- Total volume from best price to this level
-);
-
-SELECT create_hypertable('order_book', 'timestamp', if_not_exists => TRUE);
-CREATE INDEX IF NOT EXISTS order_book_symbol_timestamp_idx ON order_book (symbol, timestamp DESC);
-CREATE INDEX IF NOT EXISTS order_book_symbol_side_timestamp_idx ON order_book (symbol, side, timestamp DESC);
-
--- Order Flow Heatmap aggregated data (for faster queries)
+-- Create hypertable for real-time order flow heatmap data
 CREATE TABLE IF NOT EXISTS order_flow_heatmap (
-  id BIGSERIAL PRIMARY KEY,
-  timestamp TIMESTAMPTZ NOT NULL,
-  symbol VARCHAR(10) NOT NULL,
-  price DECIMAL NOT NULL,
-  bid_volume BIGINT NOT NULL DEFAULT 0,
-  ask_volume BIGINT NOT NULL DEFAULT 0,
-  net_volume BIGINT NOT NULL DEFAULT 0, -- bid_volume - ask_volume
-  bid_ask_ratio DECIMAL NOT NULL DEFAULT 1.0, -- bid_volume / ask_volume
-  intensity DECIMAL NOT NULL DEFAULT 0.5 -- 0-1 scale for heatmap color
+    time TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    price DECIMAL(10, 2) NOT NULL,
+    bid_volume BIGINT DEFAULT 0,
+    ask_volume BIGINT DEFAULT 0,
+    net_volume BIGINT DEFAULT 0,
+    bid_ask_ratio DECIMAL(5, 3) DEFAULT 1.0,
+    intensity DECIMAL(5, 3) DEFAULT 0.5,
+    trade_count INT DEFAULT 0,
+    PRIMARY KEY (time, symbol, price)
 );
+SELECT create_hypertable('order_flow_heatmap', 'time', if_not_exists => TRUE);
+CREATE INDEX idx_order_flow_symbol_time ON order_flow_heatmap (symbol, time DESC);
+CREATE INDEX idx_order_flow_price ON order_flow_heatmap (symbol, price);
 
-CREATE INDEX IF NOT EXISTS order_flow_heatmap_symbol_timestamp_idx ON order_flow_heatmap (symbol, timestamp DESC);
-CREATE INDEX IF NOT EXISTS order_flow_heatmap_symbol_price_timestamp_idx ON order_flow_heatmap (symbol, price, timestamp DESC);
+-- 1-minute continuous aggregation for performance
+CREATE TABLE IF NOT EXISTS order_flow_heatmap_1min (
+    bucket TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    price DECIMAL(10, 2) NOT NULL,
+    avg_bid_vol DECIMAL(15, 2),
+    avg_ask_vol DECIMAL(15, 2),
+    avg_net_vol DECIMAL(15, 2),
+    avg_ratio DECIMAL(5, 3),
+    avg_intensity DECIMAL(5, 3),
+    trade_count INT,
+    PRIMARY KEY (bucket, symbol, price)
+);
+SELECT create_hypertable('order_flow_heatmap_1min', 'bucket', if_not_exists => TRUE);
+CREATE INDEX idx_heatmap_1min_symbol ON order_flow_heatmap_1min (symbol, bucket DESC);
 
--- Order Flow Anomalies (Spoofing detection)
+-- Order flow anomalies (spoofing, phantom liquidity, wash sales)
 CREATE TABLE IF NOT EXISTS order_flow_anomalies (
-  id BIGSERIAL PRIMARY KEY,
-  timestamp TIMESTAMPTZ NOT NULL,
-  symbol VARCHAR(10) NOT NULL,
-  anomaly_type VARCHAR(50) NOT NULL, -- 'LAYERING', 'SPOOFING', 'PHANTOM_LIQUIDITY', 'SPLIT_ORDER'
-  price DECIMAL NOT NULL,
-  volume BIGINT NOT NULL,
-  severity VARCHAR(20) NOT NULL, -- 'LOW', 'MEDIUM', 'HIGH'
-  description TEXT,
-  detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id SERIAL PRIMARY KEY,
+    time TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    anomaly_type VARCHAR(50) NOT NULL, -- 'SPOOFING', 'PHANTOM_LIQUIDITY', 'WASH_SALE', 'LAYERING'
+    price DECIMAL(10, 2),
+    volume BIGINT,
+    severity VARCHAR(10) NOT NULL, -- 'LOW', 'MEDIUM', 'HIGH'
+    description TEXT,
+    is_confirmed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
+SELECT create_hypertable('order_flow_anomalies', 'time', if_not_exists => TRUE);
+CREATE INDEX idx_anomaly_symbol_time ON order_flow_anomalies (symbol, time DESC);
+CREATE INDEX idx_anomaly_severity ON order_flow_anomalies (severity, symbol);
 
-CREATE INDEX IF NOT EXISTS order_flow_anomalies_symbol_timestamp_idx ON order_flow_anomalies (symbol, timestamp DESC);
-CREATE INDEX IF NOT EXISTS order_flow_anomalies_severity_idx ON order_flow_anomalies (severity);
-
--- Market Depth Snapshot (for visualization)
+-- Market depth snapshots (bid/ask levels)
 CREATE TABLE IF NOT EXISTS market_depth (
-  id BIGSERIAL PRIMARY KEY,
-  timestamp TIMESTAMPTZ NOT NULL,
-  symbol VARCHAR(10) NOT NULL,
-  bid_levels JSON NOT NULL,     -- Array of {price, volume}
-  ask_levels JSON NOT NULL,     -- Array of {price, volume}
-  total_bid_volume BIGINT NOT NULL,
-  total_ask_volume BIGINT NOT NULL,
-  mid_price DECIMAL NOT NULL,
-  bid_ask_spread DECIMAL NOT NULL,
-  spread_bps INT NOT NULL -- Spread in basis points (0.01%)
+    time TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    bid_levels JSONB NOT NULL, -- {"price": volume, ...}
+    ask_levels JSONB NOT NULL,
+    total_bid_volume BIGINT,
+    total_ask_volume BIGINT,
+    mid_price DECIMAL(10, 2),
+    bid_ask_spread DECIMAL(10, 2),
+    spread_bps INT, -- basis points
+    PRIMARY KEY (time, symbol)
 );
+SELECT create_hypertable('market_depth', 'time', if_not_exists => TRUE);
+CREATE INDEX idx_market_depth_symbol ON market_depth (symbol, time DESC);
 
-CREATE INDEX IF NOT EXISTS market_depth_symbol_timestamp_idx ON market_depth (symbol, timestamp DESC);
+-- Order lifetime tracking (for spoofing detection)
+CREATE TABLE IF NOT EXISTS order_events (
+    id SERIAL PRIMARY KEY,
+    time TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    price DECIMAL(10, 2),
+    volume BIGINT,
+    side VARCHAR(10), -- 'BID' or 'ASK'
+    event_type VARCHAR(20), -- 'PLACED', 'MODIFIED', 'CANCELLED', 'EXECUTED'
+    order_id VARCHAR(100),
+    broker_code VARCHAR(10),
+    duration_ms INT, -- how long order existed before cancellation
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+SELECT create_hypertable('order_events', 'time', if_not_exists => TRUE);
+CREATE INDEX idx_order_events_symbol ON order_events (symbol, time DESC);
+CREATE INDEX idx_order_events_type ON order_events (event_type, symbol);
+
+-- HAKA/HAKI aggregation summary
+CREATE TABLE IF NOT EXISTS haka_haki_summary (
+    time TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    haka_volume BIGINT DEFAULT 0, -- Aggressive Buy (at ask)
+    haki_volume BIGINT DEFAULT 0, -- Aggressive Sell (at bid)
+    haka_ratio DECIMAL(5, 3), -- HAKA / (HAKA + HAKI)
+    dominance VARCHAR(10), -- 'HAKA', 'HAKI', 'BALANCED'
+    net_pressure INT, -- (HAKA - HAKI) / (HAKA + HAKI) * 100
+    PRIMARY KEY (time, symbol)
+);
+SELECT create_hypertable('haka_haki_summary', 'time', if_not_exists => TRUE);
+CREATE INDEX idx_haka_haki_symbol ON haka_haki_summary (symbol, time DESC);
+CREATE INDEX idx_haka_haki_dominance ON haka_haki_summary (dominance, symbol);
+
+-- Broker Z-Score tracking (for whale detection)
+CREATE TABLE IF NOT EXISTS broker_zscore (
+    time TIMESTAMPTZ NOT NULL,
+    symbol VARCHAR(10) NOT NULL,
+    broker_code VARCHAR(10) NOT NULL,
+    net_volume BIGINT,
+    z_score DECIMAL(8, 3),
+    is_anomaly BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (time, symbol, broker_code)
+);
+SELECT create_hypertable('broker_zscore', 'time', if_not_exists => TRUE);
+CREATE INDEX idx_broker_zscore_symbol ON broker_zscore (symbol, time DESC);
+CREATE INDEX idx_broker_zscore_anomaly ON broker_zscore (is_anomaly, symbol, time DESC);
+
+-- Grant permissions
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon, authenticated;
+GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
+
+-- Comments for documentation
+COMMENT ON TABLE order_flow_heatmap IS 'Real-time order flow data per price level for heatmap visualization';
+COMMENT ON COLUMN order_flow_heatmap.intensity IS 'Normalized intensity score 0-1 based on volume and activity';
+COMMENT ON TABLE order_flow_anomalies IS 'Detected order flow anomalies: spoofing, phantom liquidity, wash sales, layering';
+COMMENT ON TABLE market_depth IS 'Market depth snapshots with full bid/ask levels';
+COMMENT ON TABLE haka_haki_summary IS 'HAKA (aggressive buy) vs HAKI (aggressive sell) aggregations';

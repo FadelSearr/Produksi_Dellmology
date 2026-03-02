@@ -4,6 +4,7 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -53,17 +54,13 @@ func getEnvInt(key string, defaultValue int) int {
 	if value == "" {
 		return defaultValue
 	}
-	
-	// Simple string to int conversion
-	var result int
-	_, err := os.LookupEnv(key)
-	if err {
+
+	// attempt conversion using strconv
+	n, err := strconv.Atoi(value)
+	if err != nil {
 		return defaultValue
 	}
-	
-	// Parse the value (basic implementation)
-	// In production, use strconv.ParseInt
-	return defaultValue
+	return n
 }
 
 // PrintConfig prints configuration (with sanitization)

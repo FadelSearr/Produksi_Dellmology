@@ -1,16 +1,29 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
-	"sort"
 	"sync"
 	"time"
 )
 
 // --- Order Flow Types ---
+type OrderFlowEvent struct {
+	Timestamp  time.Time
+	Symbol     string
+	Price      float64
+	Volume     int64
+	Side       string // "BID" or "ASK"
+	EventType  string // "PLACED", "MODIFIED", "CANCELLED", "EXECUTED"
+	OrderID    string
+	BrokerCode string
+	DurationMs int
+}
+
 type OrderBookLevel struct {
 	Price    float64 `json:"p"`
 	Volume   int64   `json:"v"`
@@ -38,7 +51,7 @@ type OrderFlowHeatmapRow struct {
 type OrderFlowAnomaly struct {
 	Timestamp  time.Time
 	Symbol     string
-	Type       string // LAYERING, SPOOFING, PHANTOM_LIQUIDITY, SPLIT_ORDER
+	Type       string // LAYERING, SPOOFING, PHANTOM_LIQUIDITY, WASH_SALE
 	Price      float64
 	Volume     int64
 	Severity   string // LOW, MEDIUM, HIGH
@@ -48,8 +61,8 @@ type OrderFlowAnomaly struct {
 type MarketDepthSnapshot struct {
 	Timestamp         time.Time
 	Symbol            string
-	BidLevels         []map[string]interface{}
-	AskLevels         []map[string]interface{}
+	BidLevels         map[float64]int64
+	AskLevels         map[float64]int64
 	TotalBidVolume    int64
 	TotalAskVolume    int64
 	MidPrice          float64
@@ -57,12 +70,26 @@ type MarketDepthSnapshot struct {
 	SpreadBps         int // Basis points
 }
 
+type HAKAHAKISummary struct {
+	Time        time.Time
+	Symbol      string
+	HAKAVolume  int64  // Aggressive Buy (at ask)
+	HAKIVolume  int64  // Aggressive Sell (at bid)
+	HAKARatio   float64
+	Dominance   string // "HAKA", "HAKI", "BALANCED"
+	NetPressure int
+}
+
 // --- Order Flow State Tracking ---
-type OrderFlowTracker struct {
-	mu              sync.RWMutex
-	orderHistory    map[string]*OrderBookSnapshot // key: symbol
-	anomalies       map[string][]OrderFlowAnomaly
-	heatmapCache    map[string][]OrderFlowHeatmapRow
+type AnomalyDetector struct {
+	db                       *sql.DB
+	recentOrders             map[string][]OrderFlowEvent
+	recentAnomalies          map[string][]OrderFlowAnomaly
+	marketDepthCache         map[string]*MarketDepthSnapshot
+	mu                       sync.RWMutex
+	spoosingThresholdMs      int
+	phantomRatioThreshold    float64
+	washTradeThreshold       int64
 }
 
 type OrderBookSnapshot struct {
@@ -74,11 +101,7 @@ type OrderBookSnapshot struct {
 	Ask       float64
 }
 
-var orderFlowTracker = &OrderFlowTracker{
-	orderHistory: make(map[string]*OrderBookSnapshot),
-	anomalies:    make(map[string][]OrderFlowAnomaly),
-	heatmapCache: make(map[string][]OrderFlowHeatmapRow),
-}
+var anomalyDetector *AnomalyDetector
 
 // --- Order Flow Analysis ---
 
@@ -424,22 +447,404 @@ func insertDepthSnapshot(depth MarketDepthSnapshot) {
 	}
 }
 
-// --- Exported Functions ---
 
-func GetOrderFlowHeatmap(symbol string, limit int) ([]OrderFlowHeatmapRow, error) {
-	// attempt redis cache first
-	if redisClient != nil {
-		cacheKey := fmt.Sprintf("heatmap:%s:%d", symbol, limit)
-		var cached []OrderFlowHeatmapRow
-		if cacheGet(cacheKey, &cached) {
-			return cached, nil
+// --- Order Flow Analysis ---
+
+// NewAnomalyDetector creates a new anomaly detector
+func NewAnomalyDetector(db *sql.DB) *AnomalyDetector {
+	return &AnomalyDetector{
+		db:                      db,
+		recentOrders:            make(map[string][]OrderFlowEvent),
+		recentAnomalies:         make(map[string][]OrderFlowAnomaly),
+		marketDepthCache:        make(map[string]*MarketDepthSnapshot),
+		spoosingThresholdMs:     5000, // 5 seconds
+		phantomRatioThreshold:   3.0,  // 3:1 bid/ask ratio
+		washTradeThreshold:      100,  // volume threshold
+	}
+}
+
+// DetectSpoofing detects orders placed and immediately cancelled
+func (ad *AnomalyDetector) DetectSpoofing(event OrderFlowEvent) *OrderFlowAnomaly {
+	if event.DurationMs > 0 && event.DurationMs < ad.spoosingThresholdMs {
+		return &OrderFlowAnomaly{
+			Timestamp:   event.Timestamp,
+			Symbol:      event.Symbol,
+			Type:        "SPOOFING",
+			Price:       event.Price,
+			Volume:      event.Volume,
+			Severity:    ad.calculateSeverity(event.Volume),
+			Description: fmt.Sprintf("Order %s cancelled after %dms", event.OrderID, event.DurationMs),
 		}
 	}
+	return nil
+}
+
+// DetectPhantomLiquidity detects extreme bid/ask imbalances
+func (ad *AnomalyDetector) DetectPhantomLiquidity(symbol string, bidVol, askVol int64) *OrderFlowAnomaly {
+	if bidVol == 0 || askVol == 0 {
+		return nil
+	}
+
+	ratio := float64(bidVol) / float64(askVol)
+	if ratio < 1 {
+		ratio = float64(askVol) / float64(bidVol)
+	}
+
+	if ratio > ad.phantomRatioThreshold {
+		severity := "MEDIUM"
+		if ratio > ad.phantomRatioThreshold*2 {
+			severity = "HIGH"
+		}
+
+		side := "BID"
+		vol := bidVol
+		if askVol > bidVol {
+			side = "ASK"
+			vol = askVol
+		}
+
+		return &OrderFlowAnomaly{
+			Timestamp:   time.Now(),
+			Symbol:      symbol,
+			Type:        "PHANTOM_LIQUIDITY",
+			Volume:      vol,
+			Severity:    severity,
+			Description: fmt.Sprintf("Extreme %s imbalance (ratio: %.2f)", side, ratio),
+		}
+	}
+	return nil
+}
+
+// DetectWashTrade detects circular trading patterns
+func (ad *AnomalyDetector) DetectWashTrade(symbol string, buyVol, sellVol int64) *OrderFlowAnomaly {
+	if buyVol > ad.washTradeThreshold && sellVol > ad.washTradeThreshold {
+		diff := buyVol - sellVol
+		if diff < 0 {
+			diff = -diff
+		}
+
+		if diff < ad.washTradeThreshold {
+			return &OrderFlowAnomaly{
+				Timestamp:   time.Now(),
+				Symbol:      symbol,
+				Type:        "WASH_SALE",
+				Volume:      (buyVol + sellVol) / 2,
+				Severity:    "HIGH",
+				Description: fmt.Sprintf("Suspicious balanced buy/sell: buy=%d, sell=%d", buyVol, sellVol),
+			}
+		}
+	}
+	return nil
+}
+
+// DetectLayering detects multiple orders at same price level
+func (ad *AnomalyDetector) DetectLayering(symbol string, price float64, orderCount int) *OrderFlowAnomaly {
+	if orderCount > 10 {
+		return &OrderFlowAnomaly{
+			Timestamp:   time.Now(),
+			Symbol:      symbol,
+			Type:        "LAYERING",
+			Price:       price,
+			Severity:    "HIGH",
+			Description: fmt.Sprintf("Multiple orders at same level: %d orders at %.2f", orderCount, price),
+		}
+	}
+	return nil
+}
+
+// ProcessDepthData processes incoming depth data
+func (ad *AnomalyDetector) ProcessDepthData(ctx context.Context, data DepthData) error {
+	symbol := data.Symbol
+	timestamp := time.Unix(0, data.Timestamp*int64(time.Millisecond))
+
+	// Parse bid/ask levels into map
+	bidMap := make(map[float64]int64)
+	askMap := make(map[float64]int64)
+
+	for _, bid := range data.Bids {
+		bidMap[bid.Price] = bid.Volume
+	}
+	for _, ask := range data.Asks {
+		askMap[ask.Price] = ask.Volume
+	}
+
+	// Store in-memory snapshot and cache
+	snapshot := &OrderBookSnapshot{
+		Timestamp: timestamp,
+		Bids:      bidMap,
+		Asks:      askMap,
+	}
+
+	if len(data.Bids) > 0 {
+		snapshot.Bid = data.Bids[0].Price
+	}
+	if len(data.Asks) > 0 {
+		snapshot.Ask = data.Asks[0].Price
+	}
+	snapshot.LastPrice = (snapshot.Bid + snapshot.Ask) / 2
+
+	ad.mu.Lock()
+	ad.marketDepthCache[symbol] = &MarketDepthSnapshot{
+		Timestamp:      timestamp,
+		Symbol:         symbol,
+		BidLevels:      bidMap,
+		AskLevels:      askMap,
+		TotalBidVolume: calculateTotalVolume(bidMap),
+		TotalAskVolume: calculateTotalVolume(askMap),
+		MidPrice:       snapshot.LastPrice,
+		BidAskSpread:   snapshot.Ask - snapshot.Bid,
+		SpreadBps:      int((snapshot.Ask - snapshot.Bid) / snapshot.LastPrice * 10000),
+	}
+	ad.mu.Unlock()
+
+	// Insert market depth
+	return ad.insertDepthSnapshot(*ad.marketDepthCache[symbol])
+}
+
+// CalculateHeatmap calculates order flow heatmap
+func (ad *AnomalyDetector) CalculateHeatmap(ctx context.Context, symbol string, minutes int) ([]OrderFlowHeatmapRow, error) {
+	query := fmt.Sprintf(`SELECT 
+		COALESCE(time_bucket('1 minute', time), NOW()) AS bucket,
+		symbol,
+		price,
+		COALESCE(SUM(CASE WHEN side = 'BUY' THEN volume ELSE 0 END), 0) AS bid_vol,
+		COALESCE(SUM(CASE WHEN side = 'SELL' THEN volume ELSE 0 END), 0) AS ask_vol
+	  FROM trades
+	  WHERE symbol = $1 AND time > NOW() - INTERVAL '%d minutes'
+	  GROUP BY bucket, symbol, price
+	  ORDER BY bucket DESC, price DESC`, minutes)
+
+	rows, err := ad.db.QueryContext(ctx, query, symbol)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var heatmaps []OrderFlowHeatmapRow
+	for rows.Next() {
+		var (
+			bucket     time.Time
+			sym        string
+			price      float64
+			bidVol     int64
+			askVol     int64
+		)
+
+		if err := rows.Scan(&bucket, &sym, &price, &bidVol, &askVol); err != nil {
+			return nil, err
+		}
+
+		netVol := bidVol - askVol
+		ratio := 1.0
+		if askVol > 0 {
+			ratio = float64(bidVol) / float64(askVol)
+		}
+
+		// Normalize intensity 0-1
+		intensity := math.Min(1.0, float64(bidVol+askVol)/1e6)
+
+		heatmaps = append(heatmaps, OrderFlowHeatmapRow{
+			Timestamp:   bucket,
+			Symbol:      symbol,
+			Price:       price,
+			BidVolume:   bidVol,
+			AskVolume:   askVol,
+			NetVolume:   netVol,
+			BidAskRatio: ratio,
+			Intensity:   intensity,
+		})
+	}
+
+	return heatmaps, rows.Err()
+}
+
+// CalculateHAKAHAKI calculates HAKA/HAKI summary
+func (ad *AnomalyDetector) CalculateHAKAHAKI(ctx context.Context, symbol string) (*HAKAHAKISummary, error) {
+	// Get latest bid/ask from market depth
+	ad.mu.RLock()
+	depthSnapshot := ad.marketDepthCache[symbol]
+	ad.mu.RUnlock()
+
+	if depthSnapshot == nil {
+		return &HAKAHAKISummary{
+			Time:        time.Now(),
+			Symbol:      symbol,
+			HAKAVolume:  0,
+			HAKIVolume:  0,
+			HAKARatio:   0.5,
+			Dominance:   "BALANCED",
+			NetPressure: 0,
+		}, nil
+	}
+
+	bestAsk := depthSnapshot.MidPrice + depthSnapshot.BidAskSpread
+	bestBid := depthSnapshot.MidPrice - depthSnapshot.BidAskSpread/2
+
+	// Count aggressive buys (trades at or above ask) and sells (trades at or below bid)
+	query := `SELECT
+		COALESCE(SUM(CASE WHEN price >= $2 AND side = 'BUY' THEN volume ELSE 0 END), 0) AS haka,
+		COALESCE(SUM(CASE WHEN price <= $3 AND side = 'SELL' THEN volume ELSE 0 END), 0) AS haki
+	  FROM trades
+	  WHERE symbol = $1 AND time > NOW() - INTERVAL '1 minute'`
+
+	var hakaVol, hakiVol int64
+	err := ad.db.QueryRowContext(ctx, query, symbol, bestAsk, bestBid).Scan(&hakaVol, &hakiVol)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	if hakaVol == 0 && hakiVol == 0 {
+		return &HAKAHAKISummary{
+			Time:        time.Now(),
+			Symbol:      symbol,
+			HAKAVolume:  0,
+			HAKIVolume:  0,
+			HAKARatio:   0.5,
+			Dominance:   "BALANCED",
+			NetPressure: 0,
+		}, nil
+	}
+
+	total := hakaVol + hakiVol
+	ratio := float64(hakaVol) / float64(total)
+
+	dominance := "BALANCED"
+	if ratio > 0.6 {
+		dominance = "HAKA"
+	} else if ratio < 0.4 {
+		dominance = "HAKI"
+	}
+
+	netPressure := int((ratio - 0.5) * 200) // -100 to +100
+
+	return &HAKAHAKISummary{
+		Time:        time.Now(),
+		Symbol:      symbol,
+		HAKAVolume:  hakaVol,
+		HAKIVolume:  hakiVol,
+		HAKARatio:   ratio,
+		Dominance:   dominance,
+		NetPressure: netPressure,
+	}, nil
+}
+
+// InsertHeatmapData persists heatmap data to database
+func (ad *AnomalyDetector) InsertHeatmapData(ctx context.Context, heatmap OrderFlowHeatmapRow) error {
+	query := `INSERT INTO order_flow_heatmap (time, symbol, price, bid_volume, ask_volume, net_volume, bid_ask_ratio, intensity, trade_count)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	          ON CONFLICT (time, symbol, price) DO NOTHING`
+
+	_, err := ad.db.ExecContext(ctx, query,
+		heatmap.Timestamp, heatmap.Symbol, heatmap.Price, heatmap.BidVolume, heatmap.AskVolume,
+		heatmap.NetVolume, heatmap.BidAskRatio, heatmap.Intensity, 0)
+
+	return err
+}
+
+// InsertHAKAHAKIData persists HAKA/HAKI summary
+func (ad *AnomalyDetector) InsertHAKAHAKIData(ctx context.Context, summary HAKAHAKISummary) error {
+	query := `INSERT INTO haka_haki_summary (time, symbol, haka_volume, haki_volume, haka_ratio, dominance, net_pressure)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7)
+	          ON CONFLICT (time, symbol) DO NOTHING`
+
+	_, err := ad.db.ExecContext(ctx, query,
+		summary.Time, summary.Symbol, summary.HAKAVolume, summary.HAKIVolume,
+		summary.HAKARatio, summary.Dominance, summary.NetPressure)
+
+	return err
+}
+
+// insertDepthSnapshot persists market depth snapshot
+func (ad *AnomalyDetector) insertDepthSnapshot(depth MarketDepthSnapshot) error {
+	bidJSON, _ := json.Marshal(depth.BidLevels)
+	askJSON, _ := json.Marshal(depth.AskLevels)
+
+	query := `INSERT INTO market_depth (time, symbol, bid_levels, ask_levels, total_bid_volume, total_ask_volume, mid_price, bid_ask_spread, spread_bps)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	          ON CONFLICT (time, symbol) DO NOTHING`
+
+	_, err := ad.db.ExecContext(context.Background(), query,
+		depth.Timestamp, depth.Symbol, string(bidJSON), string(askJSON),
+		depth.TotalBidVolume, depth.TotalAskVolume, depth.MidPrice, depth.BidAskSpread, depth.SpreadBps)
+
+	return err
+}
+
+// calculateSeverity determines anomaly severity based on volume
+func (ad *AnomalyDetector) calculateSeverity(volume int64) string {
+	if volume > 1000000 {
+		return "HIGH"
+	} else if volume > 100000 {
+		return "MEDIUM"
+	}
+	return "LOW"
+}
+
+// GetRecentAnomalies returns recent anomalies for a symbol
+func (ad *AnomalyDetector) GetRecentAnomalies(symbol string) []OrderFlowAnomaly {
+	ad.mu.RLock()
+	defer ad.mu.RUnlock()
+
+	if anomalies, exists := ad.recentAnomalies[symbol]; exists {
+		return anomalies
+	}
+	return []OrderFlowAnomaly{}
+}
+
+// StartAggregationWorker starts background aggregation
+func (ad *AnomalyDetector) StartAggregationWorker(ctx context.Context, symbols []string) {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				for _, symbol := range symbols {
+					// Calculate and store heatmap
+					heatmaps, err := ad.CalculateHeatmap(ctx, symbol, 60)
+					if err != nil {
+						log.Printf("Error calculating heatmap: %v", err)
+						continue
+					}
+
+					for _, hm := range heatmaps {
+						if err := ad.InsertHeatmapData(ctx, hm); err != nil {
+							log.Printf("Error inserting heatmap: %v", err)
+						}
+					}
+
+					// Calculate and store HAKA/HAKI
+					summary, err := ad.CalculateHAKAHAKI(ctx, symbol)
+					if err != nil {
+						log.Printf("Error calculating HAKA/HAKI: %v", err)
+						continue
+					}
+
+					if err := ad.InsertHAKAHAKIData(ctx, *summary); err != nil {
+						log.Printf("Error inserting HAKA/HAKI: %v", err)
+					}
+				}
+			}
+		}
+	}()
+}
+
+// --- Exported Functions ---
+
+// GetOrderFlowHeatmap retrieves heatmap data
+func GetOrderFlowHeatmap(symbol string, limit int) ([]OrderFlowHeatmapRow, error) {
+	if anomalyDetector == nil {
+		return nil, fmt.Errorf("anomaly detector not initialized")
+	}
+
 	rows, err := db.Query(`
-		SELECT timestamp, symbol, price, bid_volume, ask_volume, net_volume, bid_ask_ratio, intensity
+		SELECT time, symbol, price, bid_volume, ask_volume, net_volume, bid_ask_ratio, intensity
 		FROM order_flow_heatmap
 		WHERE symbol = $1
-		ORDER BY timestamp DESC
+		ORDER BY time DESC
 		LIMIT $2
 	`, symbol, limit)
 
@@ -458,40 +863,32 @@ func GetOrderFlowHeatmap(symbol string, limit int) ([]OrderFlowHeatmapRow, error
 		results = append(results, row)
 	}
 
-	if redisClient != nil {
-		cacheKey := fmt.Sprintf("heatmap:%s:%d", symbol, limit)
-		cacheSet(cacheKey, results, 15*time.Second)
-	}
-
 	return results, rows.Err()
 }
 
+// GetLatestMarketDepth retrieves latest market depth
 func GetLatestMarketDepth(symbol string) (*MarketDepthSnapshot, error) {
-	row := db.QueryRow(`
-		SELECT timestamp, symbol, bid_levels, ask_levels, total_bid_volume, total_ask_volume, mid_price, bid_ask_spread, spread_bps
-		FROM market_depth
-		WHERE symbol = $1
-		ORDER BY timestamp DESC
-		LIMIT 1
-	`, symbol)
-
-	var depth MarketDepthSnapshot
-	var bidJSON, askJSON string
-
-	err := row.Scan(&depth.Timestamp, &depth.Symbol, &bidJSON, &askJSON, &depth.TotalBidVolume, &depth.TotalAskVolume, &depth.MidPrice, &depth.BidAskSpread, &depth.SpreadBps)
-	if err != nil {
-		return nil, err
+	if anomalyDetector == nil {
+		return nil, fmt.Errorf("anomaly detector not initialized")
 	}
 
-	_ = json.Unmarshal([]byte(bidJSON), &depth.BidLevels)
-	_ = json.Unmarshal([]byte(askJSON), &depth.AskLevels)
+	anomalyDetector.mu.RLock()
+	defer anomalyDetector.mu.RUnlock()
 
-	return &depth, nil
+	if depth, exists := anomalyDetector.marketDepthCache[symbol]; exists {
+		return depth, nil
+	}
+	return nil, fmt.Errorf("no market depth data for %s", symbol)
 }
 
+// GetAnomalies retrieves anomalies
 func GetAnomalies(symbol string, severity string, limit int) ([]OrderFlowAnomaly, error) {
+	if anomalyDetector == nil {
+		return nil, fmt.Errorf("anomaly detector not initialized")
+	}
+
 	query := `
-		SELECT timestamp, symbol, anomaly_type, price, volume, severity, description
+		SELECT time, symbol, anomaly_type, price, volume, severity, description
 		FROM order_flow_anomalies
 		WHERE symbol = $1
 	`
@@ -502,7 +899,7 @@ func GetAnomalies(symbol string, severity string, limit int) ([]OrderFlowAnomaly
 		args = append(args, severity)
 	}
 
-	query += ` ORDER BY timestamp DESC LIMIT $` + fmt.Sprint(len(args)+1)
+	query += ` ORDER BY time DESC LIMIT $` + fmt.Sprint(len(args)+1)
 	args = append(args, limit)
 
 	rows, err := db.Query(query, args...)
@@ -514,6 +911,24 @@ func GetAnomalies(symbol string, severity string, limit int) ([]OrderFlowAnomaly
 	var anomalies []OrderFlowAnomaly
 	for rows.Next() {
 		var anom OrderFlowAnomaly
+		err := rows.Scan(&anom.Timestamp, &anom.Symbol, &anom.Type, &anom.Price, &anom.Volume, &anom.Severity, &anom.Description)
+		if err != nil {
+			return nil, err
+		}
+		anomalies = append(anomalies, anom)
+	}
+
+	return anomalies, rows.Err()
+}
+
+// Helper function to calculate total volume
+func calculateTotalVolume(levels map[float64]int64) int64 {
+	var total int64
+	for _, vol := range levels {
+		total += vol
+	}
+	return total
+}
 		err := rows.Scan(&anom.Timestamp, &anom.Symbol, &anom.Type, &anom.Price, &anom.Volume, &anom.Severity, &anom.Description)
 		if err != nil {
 			return nil, err

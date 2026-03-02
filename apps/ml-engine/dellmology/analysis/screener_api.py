@@ -1,23 +1,236 @@
 """
-Screener API Module
-REST API endpoints for stock screening
+Advanced Screener API Module
+Provides REST endpoints for the Dellmology advanced stock screener
 """
 
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
+from typing import List, Dict, Optional
+from datetime import datetime
+from pydantic import BaseModel
+
+from dellmology.analysis.screener import AdvancedScreener, ScreenerMode, StockScore
+from dellmology.utils.db_utils import (
+    init_db,
+    fetch_recent_trades,
+    fetch_broker_flows,
+    fetch_ohlc_data,
+    fetch_all_symbols,
+    get_db_health,
+    fetch_order_book,
+)
+
+import redis
+import json
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/screener", tags=["screener"])
+# router uses /api prefix so endpoints like /api/screen remain unchanged
+router = APIRouter(prefix="/api", tags=["screener"])
+
+# initialize screener instance
+screener = AdvancedScreener()
+try:
+    init_db()
+except Exception as e:
+    logger.warning(f"Database init failed: {e}, will use fallback mock data")
+
+# redis cache client (optional)
+try:
+    redis_client = redis.Redis(host='localhost', port=6379, db=2)
+    redis_client.ping()
+    logging.info("Redis connected for screener cache")
+except Exception as e:
+    redis_client = None
+    logging.warning(f"Redis not available for screener: {e}")
 
 
-@router.get("/daytrade")
-async def daytrade_screen():
-    """Get daytrade opportunities"""
-    return {'status': 'ready'}
+def cache_get(key: str):
+    if not redis_client:
+        return None
+    val = redis_client.get(key)
+    if val:
+        return json.loads(val)
+    return None
 
 
-@router.get("/swing")
-async def swing_screen():
-    """Get swing trading opportunities"""
-    return {'status': 'ready'}
+def cache_set(key: str, value, ttl: int = 30):
+    if not redis_client:
+        return
+    redis_client.setex(key, ttl, json.dumps(value))
+
+
+class ScreeningRequest(BaseModel):
+    mode: str = "DAYTRADE"  # DAYTRADE, SWING, CUSTOM
+    min_score: float = 0.6
+    symbols: Optional[List[str]] = None
+    include_analysis: bool = True
+
+
+class StockScoreResponse(BaseModel):
+    symbol: str
+    score: float
+    rank: int
+    technical_score: float
+    flow_score: float
+    pressure_score: float
+    volatility_score: float
+    anomaly_score: float
+    ai_consensus: float
+    current_price: float
+    volatility_percent: float
+    haka_ratio: float
+    broker_net_value: int
+    top_broker: str
+    risk_reward_ratio: float
+    recommendation: str
+    reason: str
+    pattern_matches: List[str]
+    anomalies_detected: List[str]
+
+
+class ScreeningResponse(BaseModel):
+    mode: str
+    timestamp: str
+    total_scanned: int
+    results: List[StockScoreResponse]
+    top_pick: Optional[StockScoreResponse]
+    statistics: Dict
+
+
+@router.get("/health")
+async def health_check():
+    """Simple health endpoint for the screener service"""
+    db_health = get_db_health()
+    return {
+        "status": "healthy" if db_health.get('connected') else "degraded",
+        "database": db_health,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@router.post("/screen", response_model=ScreeningResponse)
+async def run_screening(request: ScreeningRequest):
+    try:
+        cache_key = f"screen:{request.mode}:{request.min_score}:{','.join(request.symbols or [])}"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        mode = ScreenerMode[request.mode.upper()]
+        screener.set_mode(mode)
+
+        stock_data = generate_screening_data(symbols=request.symbols or get_all_symbols())
+        results = screener.screen_all_stocks(stock_data)
+
+        response_results = [
+            StockScoreResponse(
+                symbol=r.symbol,
+                score=r.score,
+                rank=r.rank,
+                technical_score=r.technical_score,
+                flow_score=r.flow_score,
+                pressure_score=r.pressure_score,
+                volatility_score=r.volatility_score,
+                anomaly_score=r.anomaly_score,
+                ai_consensus=r.ai_consensus,
+                current_price=r.current_price,
+                volatility_percent=r.volatility_percent,
+                haka_ratio=r.haka_ratio,
+                broker_net_value=r.broker_net_value,
+                top_broker=r.top_broker,
+                risk_reward_ratio=r.risk_reward_ratio,
+                recommendation=r.recommendation,
+                reason=r.reason,
+                pattern_matches=r.pattern_matches,
+                anomalies_detected=r.anomalies_detected,
+            )
+            for r in results
+        ]
+
+        stats = {
+            "avg_score": sum(r.score for r in response_results) / (len(response_results) or 1),
+            "max_score": max((r.score for r in response_results), default=0),
+            "min_score": min((r.score for r in response_results), default=0),
+            "bullish_count": sum(1 for r in response_results if "BUY" in r.recommendation),
+            "bearish_count": sum(1 for r in response_results if "SELL" in r.recommendation),
+            "avg_volatility": sum(r.volatility_percent for r in response_results) / (len(response_results) or 1),
+            "avg_rr_ratio": sum(r.risk_reward_ratio for r in response_results) / (len(response_results) or 1),
+        }
+
+        final_resp = ScreeningResponse(
+            mode=request.mode,
+            timestamp=datetime.now().isoformat(),
+            total_scanned=len(response_results),
+            results=response_results,
+            top_pick=response_results[0] if response_results else None,
+            statistics=stats,
+        )
+        cache_set(cache_key, final_resp, ttl=30)
+        return final_resp
+    except Exception as e:
+        logger.error(f"Error during screening: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/screen-watch")
+async def screen_watch_list(symbols: List[str] = Query(["BBCA", "ASII", "BANK"])):
+    try:
+        screener.set_mode(ScreenerMode.DAYTRADE)
+        stock_data = generate_screening_data(symbols=symbols)
+        results = screener.screen_all_stocks(stock_data)
+        response_results = [
+            {
+                "symbol": r.symbol,
+                "score": r.score,
+                "rank": r.rank,
+                "recommendation": r.recommendation,
+                "current_price": r.current_price,
+                "volatility": r.volatility_percent,
+                "pressure": r.pressure_score,
+            }
+            for r in results
+        ]
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "watched_symbols": symbols,
+            "results": response_results,
+        }
+    except Exception as e:
+        logger.error(f"Error screening watch list: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Utilities ---
+
+
+def get_all_symbols() -> List[str]:
+    try:
+        return fetch_all_symbols()
+    except Exception as e:
+        logger.warning(f"Failed to fetch symbols from DB: {e}, using fallback list")
+        return [
+            "BBCA", "ASII", "UNVR", "INDF", "ICBP",  # Blue chips
+            "TLKM", "JSMR", "ADRO", "ANTM", "PGAS",  # Sectoral
+            "BBRI", "BBNI", "BMRI", "BDMN", "BNBA",  # Banks
+            "PROL", "INCO", "TINS", "MEDC", "TOWR",  # Smaller caps
+        ]
+
+
+def generate_screening_data(symbols: List[str]) -> List[Dict]:
+    """Create a minimal data structure for screener containing random/mock values."""
+    import random
+    data = []
+    for symbol in symbols:
+        data.append({
+            'symbol': symbol,
+            'current_price': random.uniform(1000, 5000),
+            'atr_percent': random.uniform(0.5, 5),
+            'patterns': [],
+            'broker_flows': {},
+            'heatmap': {'haka_volume': 0, 'haki_volume': 0, 'total_volume': 0, 'haka_ratio': 0},
+            'anomalies': [],
+        })
+    return data
+
+
