@@ -22,5 +22,5 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1
 
-# Run Telegram service by default
-CMD ["python", "telegram_service.py"]
+# Run FastAPI main server (which internally loads telegram_service as a utility module)
+CMD ["python", "main.py"]

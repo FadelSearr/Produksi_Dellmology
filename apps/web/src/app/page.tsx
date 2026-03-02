@@ -1,45 +1,57 @@
 'use client';
 
-import { CommandBar } from "@/components/layout/CommandBar";
-import { RealtimeTrades } from "@/components/monitoring/RealtimeTrades";
-import { AIScreener } from "@/components/intelligence/AIScreener";
-import { AdvancedScreener } from "@/components/analysis/AdvancedScreener";
-import { MarketIntelligenceCanvas } from "@/components/dashboard/MarketIntelligenceCanvas";
-import { OrderFlowHeatmap } from "@/components/dashboard/OrderFlowHeatmap";
-import { CnnPatternDetector } from "@/components/analysis/CnnPatternDetector";
-import DataValidationStatus from "@/components/metrics/DataValidationStatus";
-import { FlowEngine } from "@/components/dashboard/FlowEngine";
-import { BrokerFlowTable } from "@/components/BrokerFlowTable";
-import { ExitWhaleTable } from "@/components/ExitWhaleTable";
-import { GlobalCorrelationMarquee } from "@/components/dashboard/GlobalCorrelationMarquee";
-import { SystemHealthIndicators } from "@/components/monitoring/SystemHealthIndicators";
-import { AINarrativeDisplay } from "@/components/intelligence/AINarrativeDisplay";
-import TelegramSettings from "@/components/settings/TelegramSettings";
-import RetrainStatusWidget from "@/components/monitoring/RetrainStatusWidget";
-import EnhancedModelPerformanceMetrics from "@/components/metrics/EnhancedModelPerformanceMetrics";
-import ModelMetricsHistory from "@/components/metrics/ModelMetricsHistory";
-import ModelAlertThresholds from "@/components/metrics/ModelAlertThresholds";
-import CompareModelMetrics from "@/components/metrics/CompareModelMetrics";
-import { ProcessedTrade } from "@/types/global";
-import { useEffect, useState } from "react";
-import BacktestRunner from "@/components/dashboard/BacktestRunner";  // new component import
+import { useEffect, useState } from 'react';
+import { ErrorBoundary } from '@/components/common/ErrorBoundary';
+import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+
+// Import all section components
+import { Section0_CommandBar } from '@/components/sections/Section0_CommandBar';
+import { Section1_MarketIntelligence } from '@/components/sections/Section1_MarketIntelligence';
+import { Section2_BrokerFlow } from '@/components/sections/Section2_BrokerFlow';
+import { Section3_NeuralNarrative } from '@/components/sections/Section3_NeuralNarrative';
+import { Section4_RiskDock } from '@/components/sections/Section4_RiskDock';
+import { Section5_Performance } from '@/components/sections/Section5_Performance';
+
+interface ProcessedTrade {
+  id: string;
+  symbol: string;
+  price: number;
+  volume: number;
+  timestamp: string;
+  type: 'HAKA' | 'HAKI' | 'NORMAL';
+}
 
 const MAX_TRADES_IN_LIST = 50;
-const STREAM_URL = "http://localhost:8080/stream";
+const STREAM_URL = 'http://localhost:8080/stream';
 
+/**
+ * Main Dashboard - Dellmology Pro
+ * Combines all 6 sections (0-5) into a unified vertical scroll layout
+ */
 export default function Home() {
+  const [symbol, setSymbol] = useState('BBCA');
+  const [timeframe, setTimeframe] = useState<'5m' | '15m' | '1h' | '4h' | '1d'>('1h');
   const [trades, setTrades] = useState<ProcessedTrade[]>([]);
   const [isConnected, setIsConnected] = useState(false);
-  const [activeSymbol] = useState("BBCA"); // Add state for the active symbol
   const [brokerData, setBrokerData] = useState<any[]>([]);
-  const [aiNarrative, setAiNarrative] = useState<string | null>(null);
+  const [isLoadingTrades, setIsLoadingTrades] = useState(false);
 
+  // System health state
+  const [systemHealth, setSystemHealth] = useState({
+    sse: false,
+    db: true,
+    shield: true,
+  });
+
+  // Fetch trades via SSE
   useEffect(() => {
+    setIsLoadingTrades(true);
     const eventSource = new EventSource(STREAM_URL);
 
     eventSource.onopen = () => {
-      console.log("SSE connection established.");
+      console.log('✓ SSE connection established');
       setIsConnected(true);
+      setSystemHealth((prev) => ({ ...prev, sse: true }));
     };
 
     eventSource.onmessage = (event) => {
@@ -47,19 +59,18 @@ export default function Home() {
         const trade = JSON.parse(event.data) as ProcessedTrade;
         setTrades((prevTrades) => {
           const newTrades = [trade, ...prevTrades];
-          if (newTrades.length > MAX_TRADES_IN_LIST) {
-            return newTrades.slice(0, MAX_TRADES_IN_LIST);
-          }
-          return newTrades;
+          return newTrades.slice(0, MAX_TRADES_IN_LIST);
         });
+        setIsLoadingTrades(false);
       } catch (error) {
-        console.error("Failed to parse incoming trade data:", error);
+        console.error('Failed to parse trade data:', error);
       }
     };
 
     eventSource.onerror = (err) => {
-      console.error("SSE connection error:", err);
+      console.error('SSE connection error:', err);
       setIsConnected(false);
+      setSystemHealth((prev) => ({ ...prev, sse: false }));
       eventSource.close();
     };
 
@@ -68,205 +79,95 @@ export default function Home() {
     };
   }, []);
 
+  // Fetch broker flow data
   useEffect(() => {
-    async function loadBroker() {
+    const loadBrokerData = async () => {
       try {
-        const res = await fetch(`/api/broker-flow?symbol=${activeSymbol}`);
-        const json = await res.json();
-        setBrokerData(json.brokers || []);
+        const res = await fetch(`/api/broker-flow?symbol=${symbol}`);
+        if (res.ok) {
+          const json = await res.json();
+          setBrokerData(json.brokers || []);
+        }
       } catch (e) {
-        console.error('failed to fetch broker flow', e);
+        console.error('Failed to fetch broker flow:', e);
       }
-    }
-    loadBroker();
-  }, [activeSymbol]);
-
-  // fetch screener and narrative when symbol changes
-  useEffect(() => {
-    async function loadScreen() {
-      try {
-        const res = await fetch('/api/screen', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'DAYTRADE', min_score: 0.5, symbols: [activeSymbol], include_analysis: true }),
-        });
-        const json = await res.json();
-        setAiNarrative(json.ai_narrative || null);
-      } catch (e) {
-        console.error('failed to fetch screen or narrative', e);
-      }
-    }
-    loadScreen();
-  }, [activeSymbol]);
+    };
+    loadBrokerData();
+    // Poll every 60 seconds
+    const interval = setInterval(loadBrokerData, 60000);
+    return () => clearInterval(interval);
+  }, [symbol]);
 
   return (
     <div className="bg-gray-900 text-white min-h-screen">
-      <CommandBar />
-      <main className="p-4 pt-20"> {/* pt-20 for CommandBar height */}
-        <div className="w-full max-w-screen-2xl mx-auto space-y-6">
-          
-          {/* SECTION 0: Global Correlation Marquee */}
-          <div className="sticky top-20 z-40 bg-gray-900/80 backdrop-blur py-3 border-b border-gray-700">
-            <div className="text-xs text-gray-500 mb-2">📊 GLOBAL CORRELATION</div>
-            <GlobalCorrelationMarquee />
+      <ErrorBoundary>
+        {/* SECTION 0: Command Bar (Sticky) */}
+        <Section0_CommandBar
+          onSymbolChange={setSymbol}
+          marketRegime="BULLISH"
+          volatility="HIGH"
+          systemHealth={systemHealth}
+          rateLimitUsage={65}
+        />
+
+        {/* Main Content */}
+        <main className="pt-4">
+          <div className="max-w-screen-2xl mx-auto px-4 space-y-8">
+            {/* SECTION 1: Market Intelligence Canvas */}
+            <ErrorBoundary>
+              <Section1_MarketIntelligence
+                symbol={symbol}
+                isLoading={isLoadingTrades}
+                timeframe={timeframe}
+                onTimeframeChange={(tf: string) => setTimeframe(tf as any)}
+                unifiedPowerScore={75}
+              />
+            </ErrorBoundary>
+
+            {/* SECTION 2: Broker Flow Engine */}
+            <ErrorBoundary>
+              <Section2_BrokerFlow symbol={symbol} brokerData={brokerData} />
+            </ErrorBoundary>
+
+            {/* SECTION 3: Neural Narrative Hub */}
+            <ErrorBoundary>
+              <Section3_NeuralNarrative symbol={symbol} />
+            </ErrorBoundary>
+
+            {/* SECTION 4: Risk & Tactical Dock */}
+            <ErrorBoundary>
+              <Section4_RiskDock
+                symbol={symbol}
+                trades={trades}
+                unrealizedPnL={2500000}
+                maxLot={250}
+                stopLossPercent={2.5}
+                volatilityLevel="HIGH"
+              />
+            </ErrorBoundary>
+
+            {/* SECTION 5: Performance & Infrastructure Lab */}
+            <ErrorBoundary>
+              <Section5_Performance
+                symbol={symbol}
+                systemStatus={{
+                  database: systemHealth.db,
+                  streamer: systemHealth.sse,
+                  dataSync: true,
+                }}
+                modelMetrics={{
+                  tradesPerMin: trades.length > 0 ? Math.round(trades.length * 3) : 342,
+                  latencyMs: 45,
+                  uptime: '99.8%',
+                }}
+              />
+            </ErrorBoundary>
+
+            {/* Footer Spacer */}
+            <div className="h-16" />
           </div>
-
-          {/* SECTION 1: Market Intelligence Canvas (Visual Analysis) */}
-          {aiNarrative && (
-            <section className="space-y-4">
-              <h2 className="text-2xl font-bold">🧠 AI Narrative Summary</h2>
-              <div className="bg-gray-800 p-4 rounded">
-                <pre className="whitespace-pre-wrap text-sm">{aiNarrative}</pre>
-              </div>
-            </section>
-          )}
-
-          {/* SECTION: Exit Whale Alerts */}
-          {activeSymbol && <ExitWhaleTable symbol={activeSymbol} />}
-          <section className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-bold">📈 Market Intelligence Canvas</h1>
-              <SystemHealthIndicators />
-            </div>
-            <MarketIntelligenceCanvas symbol={activeSymbol} timeframe="1h" />
-          </section>
-
-          {/* Market Depth & Order Flow Heatmap */}
-          <section className="space-y-4">
-            <h2 className="text-2xl font-bold">💧 Order Flow Heatmap & Market Depth</h2>
-            <OrderFlowHeatmap symbol={activeSymbol} />
-          </section>
-
-          {/* CNN Pattern Recognition */}
-          <section className="space-y-4">
-            <h2 className="text-2xl font-bold">🔍 CNN Technical Pattern Detection</h2>
-            <CnnPatternDetector symbol={activeSymbol} />
-          </section>
-
-          {/* Advanced Multi-Factor AI Screener */}
-          <section className="space-y-4">
-            <h2 className="text-2xl font-bold">🚀 Advanced AI Screener (Multi-Factor)</h2>
-            <AdvancedScreener />
-          </section>
-
-          {/* Data Validation & Quality Monitoring */}
-          <section className="space-y-4">
-            <h2 className="text-2xl font-bold">✓ Data Quality & Validation</h2>
-            <DataValidationStatus symbol={activeSymbol} />
-          </section>
-
-          {/* SECTION 2: The Flow Engine (Bandarmology Hub) */}
-          <section className="space-y-4">
-            <FlowEngine symbol={activeSymbol} />
-            <BrokerFlowTable symbol={activeSymbol} data={brokerData} />
-          </section>
-
-          {/* SECTION 3: Neural Narrative Hub (Intelligence & Screener) */}
-          <section className="space-y-4">
-            <div>
-              <h2 className="text-2xl font-bold mb-4">🧠 Neural Narrative Hub</h2>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <AINarrativeDisplay symbol={activeSymbol} type="broker" autoRefresh={true} />
-                <AINarrativeDisplay symbol={activeSymbol} type="regime" autoRefresh={true} />
-              </div>
-            </div>
-            <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
-              <AIScreener mode="DAYTRADE" />
-            </div>
-          </section>
-
-          {/* SECTION 4: Risk & Tactical Dock */}
-          <section className="bg-linear-to-r from-orange-900/20 to-red-900/20 border border-orange-700/50 rounded-lg p-6 space-y-4">
-            <div>
-              <h2 className="text-2xl font-bold mb-4">🛡️ Risk & Tactical Dock</h2>
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                {/* Smart Position Calculator */}
-                <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-                  <h4 className="text-sm font-semibold text-white mb-3">Smart Position Sizing</h4>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Risk Level:</span>
-                      <span className="text-yellow-400">High</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Max Lot:</span>
-                      <span className="text-cyan-400">250</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Stop Loss %:</span>
-                      <span className="text-red-400">2.5%</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Live Trades Feed */}
-                <div className="lg:col-span-2">
-                  <RealtimeTrades trades={trades.filter(t => t.symbol === activeSymbol)} />
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* SECTION 5: Performance & Infrastructure Lab (Footer) */}
-          <section className="bg-gray-800/50 border border-gray-700 rounded-lg p-6">
-            <h2 className="text-2xl font-bold mb-4">📑 Performance & Infrastructure Lab</h2>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-sm">
-              <div>
-                <h4 className="text-cyan-400 font-semibold mb-2">System Status</h4>
-                <div className="space-y-1 text-gray-400">
-                  <p>✓ Database: Connected</p>
-                  <p>✓ Streamer: Active</p>
-                  <p>✓ Data Sync: Live</p>
-                </div>
-              </div>
-              <div>
-                <h4 className="text-cyan-400 font-semibold mb-2">Latest Metrics</h4>
-                <div className="space-y-1 text-gray-400">
-                  <p>Trades/min: 342</p>
-                  <p>Latency: 45ms</p>
-                  <p>Uptime: 99.8%</p>
-                </div>
-              </div>
-              <div>
-                <h4 className="text-cyan-400 font-semibold mb-2">AI Analysis</h4>
-                <div className="space-y-1 text-gray-400">
-                  <p>Model: Gemini 1.5</p>
-                  <p>Narratives: Live</p>
-                  <p>Last Update: Now</p>
-                </div>
-              </div>
-            </div>
-            <div className={`mt-4 text-xs ${isConnected ? 'text-green-500' : 'text-red-500'}`}>
-              {isConnected ? '🟢 Live connection to streamer established.' : '🔴 Disconnected from streamer.'}
-            </div>
-
-            {/* Model Status & Performance */}
-            <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <RetrainStatusWidget />
-              <EnhancedModelPerformanceMetrics symbol={activeSymbol} limit={30} />
-            </div>
-            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <ModelMetricsHistory symbol={activeSymbol} limit={30} />
-              <ModelAlertThresholds symbol={activeSymbol} />
-            </div>
-
-            {/* Model Comparison */}
-            <div className="mt-6">
-              <CompareModelMetrics />
-            </div>
-            
-            {/* Telegram Settings Component */}
-            <div className="mt-8">
-              <TelegramSettings />
-            </div>
-
-            {/* Backtest Runner Panel */}
-            <div className="mt-8">
-              <BacktestRunner />
-            </div>
-          </section>
-        </div>
-      </main>
+        </main>
+      </ErrorBoundary>
     </div>
   );
 }

@@ -7,7 +7,10 @@ services:
       - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=dellmology
-      - POSTGRES_INITDB_ARGS="-c shared_preload_libraries=timescaledb"
+      # shared_preload_libraries is already configured by the timescaledb image;
+      # initdb doesn’t accept the "-c" option, so the following line caused
+      # "initdb: unrecognized option: c" errors. Removing it fixes container start.
+      # - POSTGRES_INITDB_ARGS="-c shared_preload_libraries=timescaledb"
     ports:
       - '5433:5432'
     volumes:

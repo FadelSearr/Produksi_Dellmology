@@ -103,6 +103,76 @@ Panduan singkat ini menjelaskan cara menyiapkan dan menjalankan Dellmology Pro m
    - Klik **Deploy**; proses build akan mengeksekusi `npm run build` dan mengaktifkan edge API otomatis. Halaman dashboard akan tersedia di `<project>.vercel.app`.
    - Setelah deploy pertama, vercel akan otomatis mengeluarkan URL publik untuk front end.
 
+---
+
+### Opsi Cloud (Netlify + Supabase)
+Jika Anda ingin menjalankan seluruh aplikasi di cloud tanpa server lokal, ikuti langkah berikut. Proses ini sangat mirip dengan tutorial Adimology "Deploy Cloud".
+
+#### A1. Setup Supabase
+1. Buat akun dan proyek baru di https://supabase.com.
+2. Dari dashboard proyek, catat **API URL** dan **anon public key** (Project Settings → API Keys → Legacy keys).
+   - `NEXT_PUBLIC_SUPABASE_URL` akan berisi API URL.
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` akan berisi anon key.
+3. Buat juga **service_role** key dan simpan ke variabel `SUPABASE_SERVICE_KEY` untuk backend.
+4. Siapkan schema manual:
+   - Buka menu SQL Editor di Supabase.
+   - Copy isi setiap file di `db/init` (mulai dari `01-schema.sql` dst) dan jalankan satu per satu sampai selesai.
+   - Setelah run sekali, migrasi akan dijalankan secara otomatis oleh build process Netlify/Vercel ketika ada perubahan.
+
+#### A2. Deploy ke Netlify
+1. Fork repository ini ke akun GitHub Anda agar bisa disambungkan ke Netlify.
+2. Buka https://netlify.com, klik **Add new site → Import an existing project**.
+3. Pilih GitHub dan login, lalu pilih repository yang telah Anda fork.
+4. Atur build settings:
+   ```text
+   Build command: npm run build
+   Publish directory: apps/web/.next
+   ```
+5. Tambahkan environment variables (di menu Site settings → Build & deploy → Environment):
+   | Name                       | Value                                                                 |
+   |----------------------------|-----------------------------------------------------------------------|
+   | NEXT_PUBLIC_SUPABASE_URL   | (langkah A1)                                                           |
+   | NEXT_PUBLIC_SUPABASE_ANON_KEY | (langkah A1)                                                       |
+   | SUPABASE_SERVICE_KEY       | (langkah A1)                                                           |
+   | PUBLIC_ENGINE_URL          | (gunakan URL publik dari tunnel, mis. Cloudflare/Ngrok)              |
+   | GEMINI_API_KEY             | kunci Gemini                                                           |
+   | TELEGRAM_BOT_TOKEN         | (opsional)                                                             |
+   | TELEGRAM_CHAT_ID           | (opsional)                                                             |
+   | CRON_SECRET                | string acak untuk keamanan cron                                        |
+6. Klik **Deploy site** dan tunggu selesai. Catat URL Netlify Anda (mis. `https://your-app.netlify.app`).
+
+#### A3. Setup Chrome Extension
+1. Buka folder `stockbit-token-extension/` dalam repo.
+2. Duplikat `manifest.json.example` → `manifest.json` dan `background.js.example` → `background.js`.
+3. Ubah `manifest.json` untuk menyertakan domain Netlify Anda:
+   ```json
+   "host_permissions": [
+     "https://*.stockbit.com/*",
+     "https://your-app.netlify.app/*"
+   ]
+   ```
+4. Ubah `background.js` dengan `APP_API_URL` ke endpoint Netlify:
+   ```js
+   const APP_API_URL = "https://your-app.netlify.app/api/update-token";
+   ```
+5. Install ekstensi di Chrome:
+   - buka `chrome://extensions/` dan aktifkan Developer mode.
+   - klik **Load unpacked** dan pilih folder `stockbit-token-extension`.
+
+#### A4. Verifikasi Instalasi
+1. Login ke https://stockbit.com dengan akun Anda.
+2. Ekstensi akan otomatis menangkap token dan mengirim ke Supabase.
+3. Buka URL Netlify Anda dan periksa indikator koneksi Stockbit; harus tampil "Connected".
+4. Coba analisis saham pertama; data real-time harus mengalir.
+
+#### A5. Troubleshooting
+- Jika status tetap "Disconnected":
+  * Pastikan ekstensi berjalan dan telah diberi akses ke `stockbit.com` dan domain Netlify.
+  * Periksa apakah token tersimpan di tabel `config` Supabase.
+  * Cek logs Supabase fungsi Edge atau API untuk error.
+
+---
+
 4. **AI Narrative (Gemini)**
    - Masuk ke https://studio.google.ai, buka menu **API & Services** dan buat kunci API baru.
    - Simpan nilai kunci pada environment variable `GEMINI_API_KEY` baik di mesin lokal (untuk engine) dan di Vercel.
