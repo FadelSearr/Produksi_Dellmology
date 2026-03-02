@@ -4,7 +4,8 @@ Stock screening, backtesting, and technical analysis
 """
 
 from .screener import AdvancedScreener
-from .backtester import run_backtest
+# backtesting module was renamed; import the correct symbol
+from .backtesting import run_backtest
 from .flow_analyzer import analyze_broker_flow
 
 __all__ = [

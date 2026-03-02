@@ -1,5 +1,5 @@
 // Broker Importer - Data Models
-package models
+package importer
 
 // BrokerSummaryData represents EOD broker flow
 type BrokerSummaryData struct {

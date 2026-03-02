@@ -4,6 +4,8 @@ package main
 import (
 	"log"
 	"os"
+
+	"github.com/dellmology/broker-importer/internal/importer"
 )
 
 func main() {
@@ -14,7 +16,7 @@ func main() {
 
 	log.Println("🚀 Starting Broker Importer...")
 
-	// Create storage
+	// Create storage (using internal importer package)
 	storage, err := importer.NewStorageDB(databaseURL)
 	if err != nil {
 		log.Fatalf("Failed to create storage: %v", err)
