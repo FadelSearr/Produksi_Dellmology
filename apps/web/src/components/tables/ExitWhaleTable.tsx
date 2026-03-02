@@ -73,7 +73,7 @@ export const ExitWhaleTable: React.FC<ExitWhaleTableProps> = ({ symbol }) => {
                 <div className="inline-flex items-center gap-1">
                   <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-orange-500 to-red-500"
+                      className="h-full bg-linear-to-r from-orange-500 to-red-500"
                       style={{ width: `${exit.confidence * 100}%` }}
                     />
                   </div>
@@ -88,7 +88,7 @@ export const ExitWhaleTable: React.FC<ExitWhaleTableProps> = ({ symbol }) => {
 
       {/* Alert */}
       <div className="mt-3 p-3 bg-red-900/20 border border-red-700/50 rounded text-xs text-red-200 flex items-start gap-2">
-        <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
         <div>
           <p className="font-semibold mb-1">⚠️ Exit Whale Activity Detected</p>
           <p>Institutional investors showing signs of distribution. Monitor for potential pullback.</p>
