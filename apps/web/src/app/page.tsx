@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Calculator, Send, Bell, FileDown, FlaskConical } from 'lucide-react';
 import { Card } from '@/components/common/Card';
 import { ErrorBoundary } from '@/components/common/ErrorBoundary';
@@ -55,6 +55,37 @@ interface CoolingState {
   until: string | null;
 }
 
+interface GlobalCorrelationResponse {
+  change_ihsg?: number;
+  change_dji?: number;
+  global_sentiment?: 'BULLISH' | 'BEARISH';
+  correlation_strength?: number;
+}
+
+interface GoldenRecordResponse {
+  is_system_safe?: boolean;
+  trigger_kill_switch?: boolean;
+  failed_symbols?: string[];
+  max_allowed_deviation_pct?: number;
+}
+
+interface ModelConfidenceResponse {
+  evaluated_signals?: number;
+  hits?: number;
+  misses?: number;
+  pending?: number;
+  accuracy_pct?: number;
+  confidence_label?: 'LOW' | 'MEDIUM' | 'HIGH';
+  recalibration_required?: boolean;
+  warning?: string | null;
+}
+
+interface BetaPosition {
+  symbol: string;
+  weightPct: number;
+  beta: number;
+}
+
 /**
  * Main Dashboard - Dellmology Command Center (Bento Grid)
  */
@@ -77,6 +108,46 @@ export default function Home() {
   const [killSwitchReason, setKillSwitchReason] = useState<string | null>(null);
   const [portfolioDrawdown, setPortfolioDrawdown] = useState(-1.2);
   const [cooling, setCooling] = useState<CoolingState>({ active: false, until: null });
+  const [globalCorrelation, setGlobalCorrelation] = useState<{
+    ihsgChangePct: number;
+    djiChangePct: number;
+    sentiment: 'BULLISH' | 'BEARISH' | 'SIDEWAYS';
+    correlationStrength: number;
+  }>({ ihsgChangePct: 0, djiChangePct: 0, sentiment: 'SIDEWAYS', correlationStrength: 0.5 });
+  const [goldenRecord, setGoldenRecord] = useState<{
+    lock: boolean;
+    failedSymbols: string[];
+    maxDeviationPct: number;
+  }>({ lock: false, failedSymbols: [], maxDeviationPct: 2 });
+  const [snapshotInfo, setSnapshotInfo] = useState<{ lastSavedAt: string | null; error: string | null }>({
+    lastSavedAt: null,
+    error: null,
+  });
+  const [modelConfidence, setModelConfidence] = useState<{
+    evaluatedSignals: number;
+    hits: number;
+    misses: number;
+    pending: number;
+    accuracyPct: number;
+    label: 'LOW' | 'MEDIUM' | 'HIGH';
+    recalibrationRequired: boolean;
+    warning: string | null;
+  }>({
+    evaluatedSignals: 0,
+    hits: 0,
+    misses: 0,
+    pending: 0,
+    accuracyPct: 0,
+    label: 'LOW',
+    recalibrationRequired: false,
+    warning: null,
+  });
+  const lastSnapshotKeyRef = useRef<string>('');
+  const [betaPositions, setBetaPositions] = useState<BetaPosition[]>([
+    { symbol: 'BBCA', weightPct: 40, beta: 1.1 },
+    { symbol: 'ASII', weightPct: 35, beta: 1.25 },
+    { symbol: 'TLKM', weightPct: 25, beta: 0.9 },
+  ]);
 
   // System health state
   const [systemHealth, setSystemHealth] = useState({
@@ -103,13 +174,45 @@ export default function Home() {
   const finalImpactPct = liquidityInputs.avgDailyVolumeLots > 0 ? (recommendedLot / liquidityInputs.avgDailyVolumeLots) * 100 : 0;
   const isHighImpactOrder = requestedImpactPct > 5;
   const isCapApplied = riskBasedLot > participationCapLot;
+  const totalWeightPct = betaPositions.reduce((sum, position) => sum + Math.max(0, position.weightPct), 0);
+  const portfolioBeta =
+    totalWeightPct > 0
+      ? betaPositions.reduce((sum, position) => sum + (Math.max(0, position.weightPct) / totalWeightPct) * Math.max(0, position.beta), 0)
+      : 0;
+  const isSystemicRiskHigh = portfolioBeta > 1.5;
   const watchlist = [symbol, 'BBCA', 'ASII'];
   const topWhales = brokerData.filter((b) => b.is_whale).slice(0, 2);
   const flowRows = brokerData.slice(0, 2);
   const heatmapSeries = brokerData[0]?.daily_heatmap?.slice(-8) || [30, 45, -20, 35, -10, 55, 25, -30];
   const netWhaleFlow = topWhales.reduce((sum, whale) => sum + (whale.net_buy_value || 0), 0);
+  const isGlobalRiskMode = globalCorrelation.ihsgChangePct <= -1.5;
+  const upsMinThreshold = isGlobalRiskMode ? 90 : 70;
+  const rocThresholdPct = -5;
 
-  const technicalVote: ConsensusVote = unifiedPowerScore >= 70 ? 'BUY' : unifiedPowerScore <= 40 ? 'SELL' : 'NEUTRAL';
+  const recentTrades5m = trades.filter((trade) => {
+    if (!trade.timestamp) {
+      return false;
+    }
+    const tradeTime = new Date(trade.timestamp).getTime();
+    if (Number.isNaN(tradeTime)) {
+      return false;
+    }
+    return Date.now() - tradeTime <= 5 * 60 * 1000;
+  });
+
+  const latestPrice = recentTrades5m[0]?.price || 0;
+  const oldestPrice = recentTrades5m[recentTrades5m.length - 1]?.price || latestPrice;
+  const roc5mPct = oldestPrice > 0 ? ((latestPrice - oldestPrice) / oldestPrice) * 100 : 0;
+
+  const total5mVolume = recentTrades5m.reduce((sum, trade) => sum + (trade.volume || 0), 0);
+  const haki5mVolume = recentTrades5m
+    .filter((trade) => trade.type === 'HAKI')
+    .reduce((sum, trade) => sum + (trade.volume || 0), 0);
+  const haki5mRatio = total5mVolume > 0 ? haki5mVolume / total5mVolume : 0;
+  const rocKillSwitch = recentTrades5m.length >= 5 && roc5mPct <= rocThresholdPct && haki5mRatio >= 0.6;
+  const isAiConfidenceLow = modelConfidence.recalibrationRequired;
+
+  const technicalVote: ConsensusVote = unifiedPowerScore >= upsMinThreshold ? 'BUY' : unifiedPowerScore <= 40 ? 'SELL' : 'NEUTRAL';
   const bandarmologyVote: ConsensusVote =
     washSaleScore >= 70 ? 'NEUTRAL' : netWhaleFlow > 0 ? 'BUY' : netWhaleFlow < 0 ? 'SELL' : 'NEUTRAL';
   const sentimentVote: ConsensusVote = narrativeSignal.vote;
@@ -118,9 +221,11 @@ export default function Home() {
   const buyVotes = votes.filter((vote) => vote === 'BUY').length;
   const sellVotes = votes.filter((vote) => vote === 'SELL').length;
   const consensusSignal: ConsensusVote = buyVotes >= 2 ? 'BUY' : sellVotes >= 2 ? 'SELL' : 'NEUTRAL';
-  const shouldStandAside = consensusSignal === 'NEUTRAL';
+  const blockedByGlobalRisk = isGlobalRiskMode && unifiedPowerScore < 90 && consensusSignal === 'BUY';
+  const blockedByVolatilitySpike = rocKillSwitch && consensusSignal === 'BUY';
+  const shouldStandAside = consensusSignal === 'NEUTRAL' || blockedByGlobalRisk || blockedByVolatilitySpike;
   const isGloballyLocked = !isSystemActive || !systemHealth.db || !systemHealth.shield;
-  const isActionLocked = shouldStandAside || isGloballyLocked || cooling.active;
+  const isActionLocked = shouldStandAside || isGloballyLocked || cooling.active || goldenRecord.lock || rocKillSwitch;
   const isScreenerLocked = cooling.active;
 
   // Fetch trades via SSE
@@ -262,6 +367,187 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (consensusSignal === 'NEUTRAL') {
+      return;
+    }
+
+    const snapshotKey = `${symbol}:${timeframe}:${consensusSignal}`;
+    if (lastSnapshotKeyRef.current === snapshotKey) {
+      return;
+    }
+
+    const saveSnapshot = async () => {
+      try {
+        const currentPrice = trades[0]?.price || 0;
+        const payload = {
+          votes: {
+            technical: technicalVote,
+            bandarmology: bandarmologyVote,
+            sentiment: sentimentVote,
+            buy_votes: buyVotes,
+            sell_votes: sellVotes,
+          },
+          risk: {
+            cooling_active: cooling.active,
+            global_lock: isGloballyLocked,
+            golden_record_lock: goldenRecord.lock,
+            high_impact_order: isHighImpactOrder,
+            portfolio_beta: portfolioBeta,
+            systemic_risk_high: isSystemicRiskHigh,
+          },
+          market: {
+            ihsg_change_pct: globalCorrelation.ihsgChangePct,
+            dji_change_pct: globalCorrelation.djiChangePct,
+            global_risk_mode: isGlobalRiskMode,
+            ups_threshold: upsMinThreshold,
+          },
+          context: {
+            wash_sale_score: washSaleScore,
+            net_whale_flow: netWhaleFlow,
+            narrative_confidence: narrativeSignal.label,
+            narrative_score: narrativeSignal.score,
+          },
+          timestamp_client: new Date().toISOString(),
+        };
+
+        const response = await fetch('/api/signal-snapshots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            symbol,
+            timeframe,
+            signal: consensusSignal,
+            price: currentPrice,
+            unified_power_score: unifiedPowerScore,
+            payload,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Snapshot save failed (${response.status})`);
+        }
+
+        lastSnapshotKeyRef.current = snapshotKey;
+        setSnapshotInfo({ lastSavedAt: new Date().toISOString(), error: null });
+      } catch (error) {
+        console.error('Snapshot-on-signal failed:', error);
+        setSnapshotInfo({
+          lastSavedAt: snapshotInfo.lastSavedAt,
+          error: error instanceof Error ? error.message : 'Snapshot failed',
+        });
+      }
+    };
+
+    saveSnapshot();
+  }, [
+    consensusSignal,
+    symbol,
+    timeframe,
+    trades,
+    technicalVote,
+    bandarmologyVote,
+    sentimentVote,
+    buyVotes,
+    sellVotes,
+    cooling.active,
+    isGloballyLocked,
+    goldenRecord.lock,
+    isHighImpactOrder,
+    portfolioBeta,
+    isSystemicRiskHigh,
+    globalCorrelation.ihsgChangePct,
+    globalCorrelation.djiChangePct,
+    isGlobalRiskMode,
+    upsMinThreshold,
+    washSaleScore,
+    netWhaleFlow,
+    narrativeSignal.label,
+    narrativeSignal.score,
+    unifiedPowerScore,
+    snapshotInfo.lastSavedAt,
+  ]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchGoldenRecordValidation = async () => {
+      try {
+        const response = await fetch('/api/golden-record');
+        if (!response.ok || !mounted) {
+          return;
+        }
+
+        const data = (await response.json()) as GoldenRecordResponse;
+        if (!mounted) {
+          return;
+        }
+
+        const shouldLock = data.trigger_kill_switch === true || data.is_system_safe === false;
+        setGoldenRecord({
+          lock: shouldLock,
+          failedSymbols: data.failed_symbols || [],
+          maxDeviationPct: Number(data.max_allowed_deviation_pct || 2),
+        });
+      } catch (error) {
+        console.error('Golden record validation failed:', error);
+      }
+    };
+
+    fetchGoldenRecordValidation();
+    const interval = setInterval(fetchGoldenRecordValidation, 60_000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchGlobalCorrelation = async () => {
+      try {
+        const response = await fetch('/api/global-correlation');
+        if (!response.ok || !mounted) {
+          return;
+        }
+        const data = (await response.json()) as GlobalCorrelationResponse;
+        if (!mounted) {
+          return;
+        }
+
+        const ihsgChange = Number(data.change_ihsg || 0);
+        const djiChange = Number(data.change_dji || 0);
+        const sentiment =
+          data.global_sentiment === 'BULLISH' || data.global_sentiment === 'BEARISH'
+            ? data.global_sentiment
+            : Math.abs(ihsgChange) < 0.35
+              ? 'SIDEWAYS'
+              : ihsgChange > 0
+                ? 'BULLISH'
+                : 'BEARISH';
+
+        setGlobalCorrelation({
+          ihsgChangePct: ihsgChange,
+          djiChangePct: djiChange,
+          sentiment,
+          correlationStrength: Number(data.correlation_strength || 0.5),
+        });
+      } catch (error) {
+        console.error('Global correlation fetch failed:', error);
+      }
+    };
+
+    fetchGlobalCorrelation();
+    const interval = setInterval(fetchGlobalCorrelation, 60_000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
 
     const fetchNarrativeSignal = async () => {
@@ -317,6 +603,53 @@ export default function Home() {
     };
   }, [brokerData, washSaleScore, symbol]);
 
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchModelConfidence = async () => {
+      try {
+        const params = new URLSearchParams({
+          symbol,
+          window: '20',
+          required: '10',
+          missThreshold: '7',
+          horizonMinutes: '30',
+          slippagePct: '0.5',
+        });
+        const response = await fetch(`/api/model-confidence?${params.toString()}`);
+        if (!response.ok || !mounted) {
+          return;
+        }
+
+        const data = (await response.json()) as ModelConfidenceResponse;
+        if (!mounted) {
+          return;
+        }
+
+        setModelConfidence({
+          evaluatedSignals: Number(data.evaluated_signals || 0),
+          hits: Number(data.hits || 0),
+          misses: Number(data.misses || 0),
+          pending: Number(data.pending || 0),
+          accuracyPct: Number(data.accuracy_pct || 0),
+          label: data.confidence_label || 'LOW',
+          recalibrationRequired: data.recalibration_required === true,
+          warning: data.warning || null,
+        });
+      } catch (error) {
+        console.error('Model confidence fetch failed:', error);
+      }
+    };
+
+    fetchModelConfidence();
+    const interval = setInterval(fetchModelConfidence, 60_000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [symbol]);
+
 
   return (
     <div className="bg-gray-900 text-white min-h-screen overflow-x-hidden">
@@ -324,8 +657,8 @@ export default function Home() {
         {/* Top Navigation Bar (The Pulse) */}
         <Section0_CommandBar
           onSymbolChange={(s) => setSymbol(s.toUpperCase())}
-          marketRegime="BULLISH"
-          volatility="HIGH"
+          marketRegime={globalCorrelation.sentiment}
+          volatility={Math.abs(globalCorrelation.ihsgChangePct) >= 1.5 ? 'HIGH' : Math.abs(globalCorrelation.ihsgChangePct) >= 0.8 ? 'MEDIUM' : 'LOW'}
           systemHealth={systemHealth}
           rateLimitUsage={65}
         />
@@ -460,7 +793,7 @@ export default function Home() {
 
                     <div
                       className={`rounded-lg border p-2.5 ${
-                        isGloballyLocked
+                        isGloballyLocked || isGlobalRiskMode || goldenRecord.lock || rocKillSwitch
                           ? 'border-red-700 bg-red-900/20'
                           : shouldStandAside
                           ? 'border-yellow-700 bg-yellow-900/20'
@@ -473,7 +806,7 @@ export default function Home() {
                         <span className="text-gray-300">Multi-Model Consensus (2/3)</span>
                         <span
                           className={`font-semibold ${
-                            isGloballyLocked
+                            isGloballyLocked || isGlobalRiskMode || goldenRecord.lock || rocKillSwitch
                               ? 'text-red-300'
                               : shouldStandAside
                                 ? 'text-yellow-300'
@@ -484,10 +817,22 @@ export default function Home() {
                         >
                           {isGloballyLocked
                             ? `SYSTEM LOCKED${killSwitchReason ? ` - ${killSwitchReason}` : ''}`
+                            : goldenRecord.lock
+                              ? `GOLDEN RECORD LOCK - ${goldenRecord.failedSymbols.join(', ')}`
+                            : rocKillSwitch
+                              ? 'CRITICAL: VOLATILITY SPIKE'
+                            : isGlobalRiskMode
+                              ? `GLOBAL RISK MODE - UPS MIN ${upsMinThreshold}`
                             : shouldStandAside
                               ? 'MARKET CONFUSION - STAND ASIDE'
                               : `${consensusSignal} SIGNAL CONFIRMED`}
                         </span>
+                      </div>
+                      <div className="mb-2 text-[10px] text-gray-400">
+                        IHSG {globalCorrelation.ihsgChangePct >= 0 ? '+' : ''}{globalCorrelation.ihsgChangePct.toFixed(2)}% • DJI {globalCorrelation.djiChangePct >= 0 ? '+' : ''}{globalCorrelation.djiChangePct.toFixed(2)}% • Corr {(globalCorrelation.correlationStrength * 100).toFixed(0)}%
+                      </div>
+                      <div className="mb-2 text-[10px] text-gray-400">
+                        RoC 5m {roc5mPct >= 0 ? '+' : ''}{roc5mPct.toFixed(2)}% • HAKI 5m {(haki5mRatio * 100).toFixed(0)}%
                       </div>
                       <div className="grid grid-cols-3 gap-2 text-[11px]">
                         <div className="rounded border border-gray-700 bg-gray-900/40 px-2 py-1.5">
@@ -519,9 +864,27 @@ export default function Home() {
               <div className="xl:col-span-3 xl:min-h-132">
                 <Card title="Whale & Flow Engine" subtitle="The Tape" headerDensity="compact" className="p-3! h-full">
                   <div className="flex h-full flex-col gap-2.5">
-                    <div className={`rounded border px-2.5 py-1.5 text-[11px] font-medium ${isGloballyLocked ? 'border-red-700 bg-red-900/20 text-red-300' : shouldStandAside ? 'border-yellow-700 bg-yellow-900/20 text-yellow-300' : consensusSignal === 'BUY' ? 'border-green-700 bg-green-900/20 text-green-300' : 'border-red-700 bg-red-900/20 text-red-300'}`}>
-                      Consensus Gate: {isGloballyLocked ? `SYSTEM LOCKED${killSwitchReason ? ` - ${killSwitchReason}` : ''}` : shouldStandAside ? 'MARKET CONFUSION - STAND ASIDE' : `${consensusSignal} (${Math.max(buyVotes, sellVotes)}/3)`}
+                    <div className={`rounded border px-2.5 py-1.5 text-[11px] font-medium ${isGloballyLocked || isGlobalRiskMode || goldenRecord.lock || rocKillSwitch ? 'border-red-700 bg-red-900/20 text-red-300' : shouldStandAside ? 'border-yellow-700 bg-yellow-900/20 text-yellow-300' : consensusSignal === 'BUY' ? 'border-green-700 bg-green-900/20 text-green-300' : 'border-red-700 bg-red-900/20 text-red-300'}`}>
+                      Consensus Gate: {isGloballyLocked ? `SYSTEM LOCKED${killSwitchReason ? ` - ${killSwitchReason}` : ''}` : goldenRecord.lock ? `GOLDEN RECORD LOCK - ${goldenRecord.failedSymbols.join(', ')}` : rocKillSwitch ? 'CRITICAL: VOLATILITY SPIKE' : isGlobalRiskMode ? `GLOBAL RISK MODE - UPS >= ${upsMinThreshold}` : shouldStandAside ? 'MARKET CONFUSION - STAND ASIDE' : `${consensusSignal} (${Math.max(buyVotes, sellVotes)}/3)`}
                     </div>
+
+                    {goldenRecord.lock && (
+                      <div className="rounded border border-red-700 bg-red-900/20 px-2.5 py-1.5 text-[11px] text-red-300">
+                        Golden-Record mismatch &gt; {goldenRecord.maxDeviationPct}% on {goldenRecord.failedSymbols.join(', ')}. Execution is locked.
+                      </div>
+                    )}
+
+                    {rocKillSwitch && (
+                      <div className="rounded border border-red-700 bg-red-900/20 px-2.5 py-1.5 text-[11px] text-red-300">
+                        Flash-crash guard active: price drop {roc5mPct.toFixed(2)}% within 5m with HAKI dominance {(haki5mRatio * 100).toFixed(0)}%.
+                      </div>
+                    )}
+
+                    {isAiConfidenceLow && (
+                      <div className="rounded border border-red-700 bg-red-900/20 px-2.5 py-1.5 text-[11px] text-red-300">
+                        {modelConfidence.warning || 'AI CONFIDENCE: LOW - RE-CALIBRATION REQUIRED'}
+                      </div>
+                    )}
 
                     <div>
                       <div className="text-xs font-semibold text-gray-400 mb-1.5">Deep Broker Flow Table</div>
@@ -690,6 +1053,68 @@ export default function Home() {
                     </div>
                   )}
 
+                  <div className="mb-2 rounded border border-gray-700 bg-gray-900/30 p-2">
+                    <div className="text-[11px] font-semibold text-gray-300 mb-1.5">Beta-Weighting Analysis</div>
+                    <div className="space-y-1.5">
+                      {betaPositions.map((position, index) => (
+                        <div key={`${position.symbol}-${index}`} className="grid grid-cols-3 gap-2">
+                          <input
+                            type="text"
+                            value={position.symbol}
+                            onChange={(event) =>
+                              setBetaPositions((prev) =>
+                                prev.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, symbol: event.target.value.toUpperCase().slice(0, 6) } : item,
+                                ),
+                              )
+                            }
+                            className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px]"
+                          />
+                          <input
+                            type="number"
+                            value={position.weightPct}
+                            onChange={(event) =>
+                              setBetaPositions((prev) =>
+                                prev.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, weightPct: Math.max(0, Number(event.target.value) || 0) } : item,
+                                ),
+                              )
+                            }
+                            className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px]"
+                            placeholder="Weight %"
+                          />
+                          <input
+                            type="number"
+                            step={0.05}
+                            value={position.beta}
+                            onChange={(event) =>
+                              setBetaPositions((prev) =>
+                                prev.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, beta: Math.max(0, Number(event.target.value) || 0) } : item,
+                                ),
+                              )
+                            }
+                            className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px]"
+                            placeholder="Beta"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-1.5 text-[10px] text-gray-500">Columns: Symbol • Weight % • Beta</div>
+                  </div>
+
+                  {isSystemicRiskHigh && (
+                    <div className="mb-2 rounded border border-red-700 bg-red-900/20 px-2 py-1.5 text-[11px] text-red-300 font-semibold">
+                      Systemic Risk High: Portfolio too sensitive to Market Crash.
+                    </div>
+                  )}
+
+                  {isAiConfidenceLow && (
+                    <div className="mb-2 rounded border border-red-700 bg-red-900/20 px-2 py-1.5 text-[11px] text-red-300 font-semibold">
+                      {modelConfidence.warning || 'AI CONFIDENCE: LOW - RE-CALIBRATION REQUIRED'}
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-3 gap-2 text-sm">
                     <div className="p-2 rounded border border-gray-700 bg-gray-900/40">
                       <div className="text-gray-400 text-xs">ATR Volatility</div>
@@ -715,6 +1140,26 @@ export default function Home() {
                       <div className="text-gray-400 text-xs">Impact (Final)</div>
                       <div className="font-semibold text-cyan-300">{finalImpactPct.toFixed(2)}%</div>
                     </div>
+                    <div className="p-2 rounded border border-gray-700 bg-gray-900/40">
+                      <div className="text-gray-400 text-xs">Portfolio Beta</div>
+                      <div className={`font-semibold ${isSystemicRiskHigh ? 'text-red-300' : 'text-cyan-300'}`}>{portfolioBeta.toFixed(2)}</div>
+                    </div>
+                    <div className="p-2 rounded border border-gray-700 bg-gray-900/40">
+                      <div className="text-gray-400 text-xs">Total Weight</div>
+                      <div className="font-semibold text-yellow-300">{totalWeightPct.toFixed(0)}%</div>
+                    </div>
+                    <div className="p-2 rounded border border-gray-700 bg-gray-900/40">
+                      <div className="text-gray-400 text-xs">AI Accuracy (Hist)</div>
+                      <div className={`font-semibold ${isAiConfidenceLow ? 'text-red-300' : 'text-cyan-300'}`}>
+                        {modelConfidence.accuracyPct.toFixed(1)}% • {modelConfidence.label}
+                      </div>
+                    </div>
+                    <div className="p-2 rounded border border-gray-700 bg-gray-900/40">
+                      <div className="text-gray-400 text-xs">Last Eval Window</div>
+                      <div className="font-semibold text-yellow-300">
+                        H {modelConfidence.hits} / M {modelConfidence.misses} / P {modelConfidence.pending}
+                      </div>
+                    </div>
                   </div>
                   <button className="mt-2 w-full px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm inline-flex items-center justify-center gap-2">
                     <Calculator className="w-4 h-4" /> Calculate
@@ -733,7 +1178,7 @@ export default function Home() {
                           : 'border-cyan-700 bg-cyan-900/20 text-cyan-300 hover:bg-cyan-900/30'
                       }`}
                     >
-                      <Send className="w-4 h-4" /> {cooling.active ? 'Signal Locked: Cooling-Off' : isGloballyLocked ? 'Signal Locked: System Inactive' : shouldStandAside ? 'Signal Locked: Stand Aside' : 'Send Signal to Telegram'}
+                      <Send className="w-4 h-4" /> {cooling.active ? 'Signal Locked: Cooling-Off' : isGloballyLocked ? 'Signal Locked: System Inactive' : goldenRecord.lock ? 'Signal Locked: Golden Record' : rocKillSwitch ? 'Signal Locked: Volatility Spike' : shouldStandAside ? 'Signal Locked: Stand Aside' : 'Send Signal to Telegram'}
                     </button>
                     <button className="w-full px-3 py-2 rounded border border-yellow-700 bg-yellow-900/20 text-yellow-300 hover:bg-yellow-900/30 inline-flex items-center justify-center gap-2 text-sm">
                       <Bell className="w-4 h-4" /> Set Price Alert
@@ -744,6 +1189,13 @@ export default function Home() {
                     <button className="w-full px-3 py-2 rounded border border-green-700 bg-green-900/20 text-green-300 hover:bg-green-900/30 inline-flex items-center justify-center gap-2 text-sm">
                       <FlaskConical className="w-4 h-4" /> Backtesting Rig Control
                     </button>
+
+                    <div className="rounded border border-gray-700 bg-gray-900/40 px-2 py-1.5 text-[10px] text-gray-400">
+                      Snapshot-on-Signal: {snapshotInfo.error ? `ERROR - ${snapshotInfo.error}` : snapshotInfo.lastSavedAt ? `Saved ${new Date(snapshotInfo.lastSavedAt).toLocaleTimeString()}` : 'Waiting signal'}
+                    </div>
+                    <div className={`rounded border px-2 py-1.5 text-[10px] ${isAiConfidenceLow ? 'border-red-700 bg-red-900/20 text-red-300' : 'border-gray-700 bg-gray-900/40 text-gray-400'}`}>
+                      Model Confidence: {modelConfidence.accuracyPct.toFixed(1)}% ({modelConfidence.evaluatedSignals} eval) • {modelConfidence.label}
+                    </div>
                   </div>
                 </Card>
               </div>
