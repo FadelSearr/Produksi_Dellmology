@@ -300,6 +300,15 @@ interface PriceCrossCheckState {
   checkedAt: string | null;
 }
 
+interface DataSanityState {
+  warning: boolean;
+  reason: string | null;
+  checkedPoints: number;
+  issueCount: number;
+  maxJumpPct: number;
+  checkedAt: string | null;
+}
+
 const FALLBACK_MARKET_DATA: ChartPoint[] = [
   { time: '09:00', price: 9200, volume: 4000 },
   { time: '09:30', price: 9250, volume: 3000 },
@@ -367,6 +376,8 @@ const DASHBOARD_POLL_SECONDS = 20;
 const INCOMPLETE_DATA_GAP_SECONDS = envNumber('NEXT_PUBLIC_INCOMPLETE_DATA_GAP_SECONDS', 5);
 const INCOMPLETE_DATA_MIN_GAPS = Math.max(1, Math.floor(envNumber('NEXT_PUBLIC_INCOMPLETE_DATA_MIN_GAPS', 1)));
 const PRICE_CROSS_CHECK_THRESHOLD_PCT = envNumber('NEXT_PUBLIC_PRICE_CROSS_CHECK_THRESHOLD_PCT', 2);
+const DATA_SANITY_LOOKBACK_MINUTES = Math.max(5, Math.floor(envNumber('NEXT_PUBLIC_DATA_SANITY_LOOKBACK_MINUTES', 30)));
+const DATA_SANITY_MAX_JUMP_PCT = envNumber('NEXT_PUBLIC_DATA_SANITY_MAX_JUMP_PCT', 25);
 
 const ROADMAP_DEFAULTS = {
   killSwitchIhsgDropPct: -1.5,
@@ -454,6 +465,7 @@ function bandarmologyVoteFromFlow(
   spoofingWarning = false,
   incompleteDataWarning = false,
   crossCheckWarning = false,
+  dataSanityWarning = false,
 ): VoteSignal {
   if (brokers.length === 0) return 'NEUTRAL';
   if (artificialLiquidityWarning) return 'NEUTRAL';
@@ -462,6 +474,7 @@ function bandarmologyVoteFromFlow(
   if (spoofingWarning) return 'NEUTRAL';
   if (incompleteDataWarning) return 'NEUTRAL';
   if (crossCheckWarning) return 'NEUTRAL';
+  if (dataSanityWarning) return 'NEUTRAL';
 
   const whaleNet = brokers.filter((row) => row.type === 'Whale').reduce((sum, row) => sum + row.net, 0);
   const marketNet = brokers.reduce((sum, row) => sum + row.net, 0);
@@ -991,6 +1004,7 @@ function RightSidebar({
   spoofing,
   incompleteData,
   priceCrossCheck,
+  dataSanity,
 }: {
   brokers: BrokerRow[];
   zData: ZScorePoint[];
@@ -1001,6 +1015,7 @@ function RightSidebar({
   spoofing: SpoofingAlertState;
   incompleteData: IncompleteDataState;
   priceCrossCheck: PriceCrossCheckState;
+  dataSanity: DataSanityState;
 }) {
   const canRenderChart = typeof window !== 'undefined';
   const hasAlert = zData.some((item) => item.score > 2 || item.score < -2);
@@ -1140,6 +1155,18 @@ function RightSidebar({
             {`MaxDev ${priceCrossCheck.maxDeviationPct.toFixed(2)}% | Thr ${priceCrossCheck.thresholdPct.toFixed(2)}%`}
           </div>
           {priceCrossCheck.reason ? <div className="text-[9px] text-slate-500 font-mono mt-1">{priceCrossCheck.reason}</div> : null}
+          <div
+            className={cn(
+              'text-[9px] font-mono border rounded px-2 py-1 mt-2',
+              dataSanity.warning ? 'text-rose-300 border-rose-500/40 bg-rose-500/10' : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
+            )}
+          >
+            {dataSanity.warning ? 'DATA CONTAMINATED' : 'Data Sanity Pass'}
+          </div>
+          <div className="text-[9px] text-slate-500 font-mono mt-1">
+            {`Issues ${dataSanity.issueCount} | Points ${dataSanity.checkedPoints} | Jump ${dataSanity.maxJumpPct.toFixed(1)}%`}
+          </div>
+          {dataSanity.reason ? <div className="text-[9px] text-slate-500 font-mono mt-1">{dataSanity.reason}</div> : null}
         </div>
         <div className="flex-1 px-2 pb-2">
           {canRenderChart ? (
@@ -1684,6 +1711,14 @@ export default function Home() {
     maxDeviationPct: 0,
     checkedAt: null,
   });
+  const [dataSanity, setDataSanity] = useState<DataSanityState>({
+    warning: false,
+    reason: null,
+    checkedPoints: 0,
+    issueCount: 0,
+    maxJumpPct: DATA_SANITY_MAX_JUMP_PCT,
+    checkedAt: null,
+  });
   const bidWallAgesRef = useRef<Map<number, number>>(new Map());
   const spoofingStreakRef = useRef(0);
 
@@ -1729,6 +1764,9 @@ export default function Home() {
       fetch(
         `/api/price-cross-check?symbols=${encodeURIComponent(Array.from(new Set([activeSymbol, 'BBCA', 'ASII', 'TLKM'])).join(','))}&thresholdPct=${PRICE_CROSS_CHECK_THRESHOLD_PCT}`,
       )
+        .then((response) => (response.ok ? response.json() : null))
+        .catch(() => null),
+      fetch(`/api/data-sanity?symbol=${activeSymbol}&lookbackMinutes=${DATA_SANITY_LOOKBACK_MINUTES}&maxJumpPct=${DATA_SANITY_MAX_JUMP_PCT}`)
         .then((response) => (response.ok ? response.json() : null))
         .catch(() => null),
     ]);
@@ -1782,6 +1820,14 @@ export default function Home() {
       flagged_symbols?: string[];
       checked_at?: string;
       rows?: Array<{ symbol?: string; deviation_pct?: number | null; flagged?: boolean }>;
+    } | null;
+    const sanity = requests[14] as {
+      contaminated?: boolean;
+      lock_recommended?: boolean;
+      checked_points?: number;
+      issues?: Array<{ type?: string; detail?: string }>;
+      max_jump_pct?: number;
+      checked_at?: string;
     } | null;
 
     const snapshotRows = (snapshots?.snapshots || [])
@@ -1939,6 +1985,19 @@ export default function Home() {
       flaggedSymbols,
       maxDeviationPct,
       checkedAt: crossCheck?.checked_at || null,
+    });
+
+    const sanityIssueCount = Array.isArray(sanity?.issues) ? sanity?.issues.length : 0;
+    const sanityWarning = Boolean(sanity?.contaminated) || Boolean(sanity?.lock_recommended);
+    setDataSanity({
+      warning: sanityWarning,
+      reason: sanityWarning
+        ? sanity?.issues?.[0]?.detail || `Anomali data terdeteksi (${sanityIssueCount} issues).`
+        : null,
+      checkedPoints: Number(sanity?.checked_points || 0),
+      issueCount: sanityIssueCount,
+      maxJumpPct: Number(sanity?.max_jump_pct || DATA_SANITY_MAX_JUMP_PCT),
+      checkedAt: sanity?.checked_at || null,
     });
 
     const ihsgChangePct = Number(global?.change_ihsg || 0);
@@ -2114,6 +2173,7 @@ export default function Home() {
       spoofingWarning,
       incompleteDataWarning,
       crossCheckWarning,
+      sanityWarning,
     );
     const preliminarySentimentVote = rocCritical
       ? 'NEUTRAL'
@@ -2145,12 +2205,13 @@ export default function Home() {
         `Order Lifetime: ${spoofingWarning ? 'Spoofing Alert' : 'Stable'}\n` +
         `Data Integrity: ${incompleteDataWarning ? 'Incomplete Data' : 'Complete'}\n` +
         `Cross-Check: ${crossCheckWarning ? 'LOCK' : 'OK'}\n` +
+        `Data Sanity: ${sanityWarning ? 'DATA CONTAMINATED' : 'PASS'}\n` +
         `RoC Kill-Switch: ${rocCritical ? 'CRITICAL: VOLATILITY SPIKE' : 'Normal'}\n` +
         `Consensus: ${preliminaryConsensus.message}\n` +
         `Cooling-Off: ${coolingActive ? 'ACTIVE (Recommendation Locked)' : 'Clear'}\n` +
         `Whale Flow: ${topWhales || 'No dominant whale detected'}\n` +
         `Model Confidence: ${confLabel} (${Number(confidence?.accuracy_pct || 0).toFixed(1)}%)\n\n` +
-        `> Recommendation: ${coolingActive ? 'Cooling-off active. Stand down and review risk.' : crossCheckWarning ? 'Cross-check lock aktif. Tahan eksekusi sampai harga sinkron.' : incompleteDataWarning ? 'Data belum lengkap. Tunda aksi sampai stream normal.' : rocCritical ? 'CRITICAL volatility spike. Disable buy and wait stabilization.' : spoofingWarning ? 'Spoofing risk terdeteksi. Hindari entry impulsif.' : nextUps >= minUpsForLong ? 'Momentum entry on pullback.' : nextUps <= 40 ? 'Defensive mode, avoid aggressive entry.' : 'Wait for clearer confirmation.'}`,
+        `> Recommendation: ${coolingActive ? 'Cooling-off active. Stand down and review risk.' : sanityWarning ? 'Data contaminated. Lock sinyal hingga verifikasi ulang.' : crossCheckWarning ? 'Cross-check lock aktif. Tahan eksekusi sampai harga sinkron.' : incompleteDataWarning ? 'Data belum lengkap. Tunda aksi sampai stream normal.' : rocCritical ? 'CRITICAL volatility spike. Disable buy and wait stabilization.' : spoofingWarning ? 'Spoofing risk terdeteksi. Hindari entry impulsif.' : nextUps >= minUpsForLong ? 'Momentum entry on pullback.' : nextUps <= 40 ? 'Defensive mode, avoid aggressive entry.' : 'Wait for clearer confirmation.'}`,
     );
 
     try {
@@ -2487,6 +2548,14 @@ export default function Home() {
       return;
     }
 
+    if (dataSanity.warning) {
+      setActionState({
+        busy: false,
+        message: `Alert blocked: DATA CONTAMINATED (${dataSanity.issueCount} issues)`,
+      });
+      return;
+    }
+
     if (priceCrossCheck.warning) {
       setActionState({
         busy: false,
@@ -2621,6 +2690,14 @@ export default function Home() {
               max_deviation_pct: priceCrossCheck.maxDeviationPct,
               checked_at: priceCrossCheck.checkedAt,
             },
+            data_sanity: {
+              warning: dataSanity.warning,
+              reason: dataSanity.reason,
+              checked_points: dataSanity.checkedPoints,
+              issue_count: dataSanity.issueCount,
+              max_jump_pct: dataSanity.maxJumpPct,
+              checked_at: dataSanity.checkedAt,
+            },
           },
         }),
       });
@@ -2684,6 +2761,12 @@ export default function Home() {
     incompleteData.reason,
     incompleteData.gapCount,
     incompleteData.maxGapSeconds,
+    dataSanity.warning,
+    dataSanity.reason,
+    dataSanity.checkedPoints,
+    dataSanity.issueCount,
+    dataSanity.maxJumpPct,
+    dataSanity.checkedAt,
     priceCrossCheck.warning,
     priceCrossCheck.reason,
     priceCrossCheck.flaggedSymbols,
@@ -2966,6 +3049,7 @@ export default function Home() {
           spoofing={spoofingAlert}
           incompleteData={incompleteData}
           priceCrossCheck={priceCrossCheck}
+          dataSanity={dataSanity}
         />
       </div>
       {!combatMode.active ? (
