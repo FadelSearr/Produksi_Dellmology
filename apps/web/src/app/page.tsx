@@ -269,6 +269,14 @@ interface VolumeProfileDivergenceState {
   upperRangePositionPct: number;
 }
 
+interface RocKillSwitchState {
+  active: boolean;
+  reason: string | null;
+  dropPct: number;
+  windowPoints: number;
+  hakiRatio: number;
+}
+
 const FALLBACK_MARKET_DATA: ChartPoint[] = [
   { time: '09:00', price: 9200, volume: 4000 },
   { time: '09:30', price: 9250, volume: 3000 },
@@ -326,6 +334,9 @@ const PARTICIPATION_CAP_KILL_SWITCH_PCT = envNumber('NEXT_PUBLIC_PARTICIPATION_C
 const SYSTEMIC_RISK_BETA_THRESHOLD = envNumber('NEXT_PUBLIC_SYSTEMIC_RISK_BETA_THRESHOLD', 1.5);
 const SYSTEMIC_RISK_HARD_GATE = envBool('NEXT_PUBLIC_SYSTEMIC_RISK_HARD_GATE', true);
 const COMBAT_MODE_VOLATILITY_PCT = envNumber('NEXT_PUBLIC_COMBAT_MODE_VOLATILITY_PCT', 2.5);
+const ROC_KILL_SWITCH_DROP_PCT = envNumber('NEXT_PUBLIC_ROC_KILL_SWITCH_DROP_PCT', -3);
+const ROC_KILL_SWITCH_WINDOW_POINTS = envNumber('NEXT_PUBLIC_ROC_KILL_SWITCH_WINDOW_POINTS', 5);
+const ROC_KILL_SWITCH_HAKI_RATIO_THRESHOLD = envNumber('NEXT_PUBLIC_ROC_KILL_SWITCH_HAKI_RATIO_THRESHOLD', 0.6);
 
 const ROADMAP_DEFAULTS = {
   killSwitchIhsgDropPct: -1.5,
@@ -496,6 +507,17 @@ function buildCombatBullets(consensus: ModelConsensus, coolingActive: boolean): 
   }
 
   return ['WHALE EXIT ALERT', 'REDUCE RISK FAST', 'NO FOMO ENTRY'];
+}
+
+function applyRocConsensusGuard(consensus: ModelConsensus, rocActive: boolean): ModelConsensus {
+  if (!rocActive) return consensus;
+  if (consensus.status !== 'CONSENSUS_BULL') return consensus;
+  return {
+    ...consensus,
+    pass: false,
+    status: 'CONFUSION',
+    message: 'CRITICAL: VOLATILITY SPIKE - BUY DISABLED',
+  };
 }
 
 function StatusDot({ status, label }: { status: Tone; label: string }) {
@@ -929,12 +951,14 @@ function RightSidebar({
   artificialLiquidity,
   brokerCharacter,
   divergence,
+  rocKillSwitch,
 }: {
   brokers: BrokerRow[];
   zData: ZScorePoint[];
   artificialLiquidity: ArtificialLiquidityState;
   brokerCharacter: BrokerCharacterState;
   divergence: VolumeProfileDivergenceState;
+  rocKillSwitch: RocKillSwitchState;
 }) {
   const canRenderChart = typeof window !== 'undefined';
   const hasAlert = zData.some((item) => item.score > 2 || item.score < -2);
@@ -1026,6 +1050,18 @@ function RightSidebar({
             {`UpperVol ${divergence.highBandVolumeSharePct.toFixed(1)}% | Pos ${divergence.upperRangePositionPct.toFixed(1)}%`}
           </div>
           {divergence.reason ? <div className="text-[9px] text-slate-500 font-mono mt-1">{divergence.reason}</div> : null}
+          <div
+            className={cn(
+              'text-[9px] font-mono border rounded px-2 py-1 mt-2',
+              rocKillSwitch.active ? 'text-rose-300 border-rose-500/40 bg-rose-500/10' : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
+            )}
+          >
+            {rocKillSwitch.active ? 'CRITICAL: VOLATILITY SPIKE' : 'RoC Kill-Switch Normal'}
+          </div>
+          <div className="text-[9px] text-slate-500 font-mono mt-1">
+            {`RoC ${rocKillSwitch.dropPct.toFixed(2)}% | HAKI ${(rocKillSwitch.hakiRatio * 100).toFixed(1)}% | W ${rocKillSwitch.windowPoints}`}
+          </div>
+          {rocKillSwitch.reason ? <div className="text-[9px] text-slate-500 font-mono mt-1">{rocKillSwitch.reason}</div> : null}
         </div>
         <div className="flex-1 px-2 pb-2">
           {canRenderChart ? (
@@ -1543,6 +1579,13 @@ export default function Home() {
     highBandVolumeSharePct: 0,
     upperRangePositionPct: 0,
   });
+  const [rocKillSwitch, setRocKillSwitch] = useState<RocKillSwitchState>({
+    active: false,
+    reason: null,
+    dropPct: 0,
+    windowPoints: Math.max(2, Math.floor(ROC_KILL_SWITCH_WINDOW_POINTS)),
+    hakiRatio: 0,
+  });
 
   const [infraStatus, setInfraStatus] = useState<{ sse: Tone; db: Tone; integrity: Tone; token: Tone }>({
     sse: 'good',
@@ -1809,6 +1852,7 @@ export default function Home() {
     const volClass = marketIntel?.volatility?.classification || 'MEDIUM';
     const volPct = Math.abs(Number(marketIntel?.volatility?.percentage || 0));
     const confLabel = confidence?.confidence_label || 'MEDIUM';
+    const hakiRatio = Math.max(0, Math.min(1, Number(marketIntel?.metrics?.haki_ratio || 0)));
     const coolingActive = Boolean(coolingState?.active);
     const betaDenominator = Math.max(0.2, Math.abs(ihsgChangePct));
     const betaEstimateLocal = Math.abs(deltaPct) / betaDenominator;
@@ -1817,7 +1861,6 @@ export default function Home() {
       ? `KILL-SWITCH ACTIVE (IHSG ${ihsgChangePct.toFixed(2)}%, min UPS ${minUpsForLong})`
       : `NORMAL (${minUpsForLong} UPS gate)`;
 
-    const technicalVote = technicalVoteFromUps(nextUps, minUpsForLong);
     const artificialLiquidityWarning = Boolean(brokerFlow?.stats?.artificial_liquidity_warning);
     const brokerCharacterWarning = Boolean(brokerFlow?.stats?.bcp_risk_warning);
     const whaleNetPositive = brokerRows.filter((row) => row.type === 'Whale').reduce((sum, row) => sum + row.net, 0) > 0;
@@ -1834,9 +1877,37 @@ export default function Home() {
       highBandVolumeSharePct: upperBandSharePct,
       upperRangePositionPct: Math.max(0, Math.min(100, upperRangePositionPct)),
     });
+    const rocWindowPoints = Math.max(2, Math.floor(ROC_KILL_SWITCH_WINDOW_POINTS));
+    const rocSeries = (mainPriceSeries.length >= 2
+      ? mainPriceSeries.map((row) => Number(row.price || 0))
+      : marketData.map((row) => Number(row.price || 0))
+    ).filter((price) => price > 0);
+    const rocWindow = rocSeries.slice(-rocWindowPoints);
+    const rocStart = Number(rocWindow[0] || rocSeries[0] || firstPrice);
+    const rocEnd = Number(rocWindow[rocWindow.length - 1] || lastPrice);
+    const rocDropPct = rocStart > 0 ? ((rocEnd - rocStart) / rocStart) * 100 : 0;
+    const hakiMassive = hakiRatio >= ROC_KILL_SWITCH_HAKI_RATIO_THRESHOLD;
+    const rocCritical = rocDropPct <= ROC_KILL_SWITCH_DROP_PCT && !hakiMassive;
+    setRocKillSwitch({
+      active: rocCritical,
+      reason: rocCritical
+        ? `RoC ${rocDropPct.toFixed(2)}% (window ${rocWindowPoints}) dengan HAKI ${(hakiRatio * 100).toFixed(1)}% < ${(ROC_KILL_SWITCH_HAKI_RATIO_THRESHOLD * 100).toFixed(1)}%.`
+        : null,
+      dropPct: rocDropPct,
+      windowPoints: rocWindowPoints,
+      hakiRatio,
+    });
+
+    const technicalVote = rocCritical ? 'NEUTRAL' : technicalVoteFromUps(nextUps, minUpsForLong);
     const bandarmologyVote = bandarmologyVoteFromFlow(brokerRows, artificialLiquidityWarning, brokerCharacterWarning, lateEntryWarning);
-    const preliminarySentimentVote = global?.global_sentiment === 'BULLISH' ? 'BUY' : global?.global_sentiment === 'BEARISH' ? 'SELL' : 'NEUTRAL';
-    const preliminaryConsensus = buildConsensus(technicalVote, bandarmologyVote, preliminarySentimentVote);
+    const preliminarySentimentVote = rocCritical
+      ? 'NEUTRAL'
+      : global?.global_sentiment === 'BULLISH'
+        ? 'BUY'
+        : global?.global_sentiment === 'BEARISH'
+          ? 'SELL'
+          : 'NEUTRAL';
+    const preliminaryConsensus = applyRocConsensusGuard(buildConsensus(technicalVote, bandarmologyVote, preliminarySentimentVote), rocCritical);
     setModelConsensus(preliminaryConsensus);
     const combatActive = volClass.toUpperCase() === 'HIGH' || volPct >= COMBAT_MODE_VOLATILITY_PCT;
     setCombatMode({
@@ -1856,11 +1927,12 @@ export default function Home() {
         `Flow Integrity: ${artificialLiquidityWarning ? 'Artificial Liquidity Warning' : 'Healthy'}\n` +
         `BCP: ${brokerCharacterWarning ? 'Risk Profile Detected' : 'Stable'}\n` +
         `Volume Profile: ${lateEntryWarning ? 'Late Entry Warning' : 'Normal'}\n` +
+        `RoC Kill-Switch: ${rocCritical ? 'CRITICAL: VOLATILITY SPIKE' : 'Normal'}\n` +
         `Consensus: ${preliminaryConsensus.message}\n` +
         `Cooling-Off: ${coolingActive ? 'ACTIVE (Recommendation Locked)' : 'Clear'}\n` +
         `Whale Flow: ${topWhales || 'No dominant whale detected'}\n` +
         `Model Confidence: ${confLabel} (${Number(confidence?.accuracy_pct || 0).toFixed(1)}%)\n\n` +
-        `> Recommendation: ${coolingActive ? 'Cooling-off active. Stand down and review risk.' : nextUps >= minUpsForLong ? 'Momentum entry on pullback.' : nextUps <= 40 ? 'Defensive mode, avoid aggressive entry.' : 'Wait for clearer confirmation.'}`,
+        `> Recommendation: ${coolingActive ? 'Cooling-off active. Stand down and review risk.' : rocCritical ? 'CRITICAL volatility spike. Disable buy and wait stabilization.' : nextUps >= minUpsForLong ? 'Momentum entry on pullback.' : nextUps <= 40 ? 'Defensive mode, avoid aggressive entry.' : 'Wait for clearer confirmation.'}`,
     );
 
     try {
@@ -1882,7 +1954,7 @@ export default function Home() {
         const narrativeBody = (await narrativeResponse.json()) as { narrative?: string };
         const extracted = extractAdversarialNarrative(narrativeBody.narrative || '');
         const sentimentVote = sentimentVoteFromNarrative(extracted.bullish, extracted.bearish, global?.global_sentiment);
-        const finalConsensus = buildConsensus(technicalVote, bandarmologyVote, sentimentVote);
+        const finalConsensus = applyRocConsensusGuard(buildConsensus(technicalVote, bandarmologyVote, sentimentVote), rocCritical);
         setModelConsensus(finalConsensus);
         setCombatMode((prev) => ({ ...prev, bullets: buildCombatBullets(finalConsensus, coolingActive) }));
         setAdversarialNarrative({
@@ -1898,7 +1970,7 @@ export default function Home() {
             ? `Systemic risk tinggi: beta ${betaEstimateLocal.toFixed(2)} di atas threshold.`
             : 'Risiko downside tetap ada jika volume tidak konfirmasi dan IHSG melemah.';
         const sentimentVote = sentimentVoteFromNarrative(fallbackBullish, fallbackBearish, global?.global_sentiment);
-        const finalConsensus = buildConsensus(technicalVote, bandarmologyVote, sentimentVote);
+        const finalConsensus = applyRocConsensusGuard(buildConsensus(technicalVote, bandarmologyVote, sentimentVote), rocCritical);
         setModelConsensus(finalConsensus);
         setCombatMode((prev) => ({ ...prev, bullets: buildCombatBullets(finalConsensus, coolingActive) }));
         setAdversarialNarrative({
@@ -1915,7 +1987,7 @@ export default function Home() {
           ? `Systemic risk tinggi: beta ${betaEstimateLocal.toFixed(2)} di atas threshold.`
           : 'Risiko downside tetap ada jika volume tidak konfirmasi dan IHSG melemah.';
       const sentimentVote = sentimentVoteFromNarrative(fallbackBullish, fallbackBearish, global?.global_sentiment);
-      const finalConsensus = buildConsensus(technicalVote, bandarmologyVote, sentimentVote);
+      const finalConsensus = applyRocConsensusGuard(buildConsensus(technicalVote, bandarmologyVote, sentimentVote), rocCritical);
       setModelConsensus(finalConsensus);
       setCombatMode((prev) => ({ ...prev, bullets: buildCombatBullets(finalConsensus, coolingActive) }));
       setAdversarialNarrative({
@@ -2205,6 +2277,14 @@ export default function Home() {
       return;
     }
 
+    if (rocKillSwitch.active && (modelConsensus.status === 'CONSENSUS_BULL' || upsScore >= minUpsForLong)) {
+      setActionState({
+        busy: false,
+        message: `Alert blocked: CRITICAL volatility spike (${rocKillSwitch.dropPct.toFixed(2)}%)`,
+      });
+      return;
+    }
+
     if (deploymentGate.blocked) {
       setActionState({
         busy: false,
@@ -2268,6 +2348,14 @@ export default function Home() {
               upper_band_volume_share_pct: volumeProfileDivergence.highBandVolumeSharePct,
               upper_range_position_pct: volumeProfileDivergence.upperRangePositionPct,
             },
+            roc_kill_switch: {
+              active: rocKillSwitch.active,
+              reason: rocKillSwitch.reason,
+              drop_pct: rocKillSwitch.dropPct,
+              window_points: rocKillSwitch.windowPoints,
+              haki_ratio: rocKillSwitch.hakiRatio,
+              drop_threshold_pct: ROC_KILL_SWITCH_DROP_PCT,
+            },
           },
         }),
       });
@@ -2318,6 +2406,11 @@ export default function Home() {
     volumeProfileDivergence.reason,
     volumeProfileDivergence.highBandVolumeSharePct,
     volumeProfileDivergence.upperRangePositionPct,
+    rocKillSwitch.active,
+    rocKillSwitch.reason,
+    rocKillSwitch.dropPct,
+    rocKillSwitch.windowPoints,
+    rocKillSwitch.hakiRatio,
   ]);
 
   const runBacktest = useCallback(async () => {
@@ -2590,6 +2683,7 @@ export default function Home() {
           artificialLiquidity={artificialLiquidity}
           brokerCharacter={brokerCharacter}
           divergence={volumeProfileDivergence}
+          rocKillSwitch={rocKillSwitch}
         />
       </div>
       {!combatMode.active ? (
