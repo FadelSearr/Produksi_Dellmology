@@ -208,6 +208,19 @@ interface AdversarialNarrative {
   source: 'ai' | 'fallback';
 }
 
+type VoteSignal = 'BUY' | 'SELL' | 'NEUTRAL';
+
+interface ModelConsensus {
+  technical: VoteSignal;
+  bandarmology: VoteSignal;
+  sentiment: VoteSignal;
+  bullishVotes: number;
+  bearishVotes: number;
+  pass: boolean;
+  status: 'CONSENSUS_BULL' | 'CONSENSUS_BEAR' | 'CONFUSION';
+  message: string;
+}
+
 const FALLBACK_MARKET_DATA: ChartPoint[] = [
   { time: '09:00', price: 9200, volume: 4000 },
   { time: '09:30', price: 9250, volume: 3000 },
@@ -334,6 +347,81 @@ function extractAdversarialNarrative(rawNarrative: string): { bullish: string; b
   return {
     bullish: bullishText || 'Belum ada narasi bullish dari AI.',
     bearish: bearishText,
+  };
+}
+
+function technicalVoteFromUps(ups: number, minUpsForLong: number): VoteSignal {
+  if (ups >= minUpsForLong) return 'BUY';
+  if (ups <= 45) return 'SELL';
+  return 'NEUTRAL';
+}
+
+function bandarmologyVoteFromFlow(brokers: BrokerRow[]): VoteSignal {
+  if (brokers.length === 0) return 'NEUTRAL';
+
+  const whaleNet = brokers.filter((row) => row.type === 'Whale').reduce((sum, row) => sum + row.net, 0);
+  const marketNet = brokers.reduce((sum, row) => sum + row.net, 0);
+
+  if (whaleNet > 0 && marketNet > 0) return 'BUY';
+  if (whaleNet < 0 && marketNet < 0) return 'SELL';
+  return 'NEUTRAL';
+}
+
+function sentimentVoteFromNarrative(
+  bullishText: string,
+  bearishText: string,
+  fallbackGlobalSentiment?: 'BULLISH' | 'BEARISH',
+): VoteSignal {
+  const positiveHits = (bullishText.match(/bullish|akumulasi|momentum|buy|uptrend|dominan/gi) || []).length;
+  const negativeHits = (bearishText.match(/bearish|risiko|distribution|sell|downtrend|volatility|lock/gi) || []).length;
+
+  if (positiveHits > negativeHits) return 'BUY';
+  if (negativeHits > positiveHits) return 'SELL';
+  if (fallbackGlobalSentiment === 'BULLISH') return 'BUY';
+  if (fallbackGlobalSentiment === 'BEARISH') return 'SELL';
+  return 'NEUTRAL';
+}
+
+function buildConsensus(technical: VoteSignal, bandarmology: VoteSignal, sentiment: VoteSignal): ModelConsensus {
+  const votes = [technical, bandarmology, sentiment];
+  const bullishVotes = votes.filter((vote) => vote === 'BUY').length;
+  const bearishVotes = votes.filter((vote) => vote === 'SELL').length;
+
+  if (bullishVotes >= 2) {
+    return {
+      technical,
+      bandarmology,
+      sentiment,
+      bullishVotes,
+      bearishVotes,
+      pass: true,
+      status: 'CONSENSUS_BULL',
+      message: `Consensus Bullish (${bullishVotes}/3 setuju)` ,
+    };
+  }
+
+  if (bearishVotes >= 2) {
+    return {
+      technical,
+      bandarmology,
+      sentiment,
+      bullishVotes,
+      bearishVotes,
+      pass: true,
+      status: 'CONSENSUS_BEAR',
+      message: `Consensus Bearish (${bearishVotes}/3 setuju)`,
+    };
+  }
+
+  return {
+    technical,
+    bandarmology,
+    sentiment,
+    bullishVotes,
+    bearishVotes,
+    pass: false,
+    status: 'CONFUSION',
+    message: 'MARKET CONFUSION - STAND ASIDE',
   };
 }
 
@@ -877,6 +965,7 @@ function BottomPanel({
   lastRiskAudit,
   staleAudit,
   coolingOff,
+  modelConsensus,
 }: {
   narrative: string;
   adversarialNarrative: AdversarialNarrative;
@@ -915,6 +1004,7 @@ function BottomPanel({
   lastRiskAudit: RiskAuditInfo;
   staleAudit: boolean;
   coolingOff: CoolingOffState;
+  modelConsensus: ModelConsensus;
 }) {
   const label = confidence?.confidence_label || 'MEDIUM';
   const accuracy = Number(confidence?.accuracy_pct || 0);
@@ -1101,7 +1191,7 @@ function BottomPanel({
         <div className="p-3 grid grid-cols-1 gap-2">
           <button
             onClick={onSendTelegram}
-            disabled={actionState.busy || coolingOff.active}
+            disabled={actionState.busy || coolingOff.active || !modelConsensus.pass}
             className="flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold py-2 rounded transition-colors"
           >
             <Send className="w-3.5 h-3.5" />
@@ -1138,6 +1228,21 @@ function BottomPanel({
             {coolingOff.active
               ? `COOLING-OFF ACTIVE: ${Math.max(0, Math.floor(coolingOff.remainingSeconds / 60))}m left`
               : `Cooling-Off: streak ${coolingOff.breachStreak}/${runtimeCoolingOffRequiredBreaches}`}
+          </div>
+          <div
+            className={cn(
+              'text-[9px] font-mono border rounded px-2 py-1',
+              modelConsensus.pass
+                ? modelConsensus.status === 'CONSENSUS_BULL'
+                  ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
+                  : 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+                : 'text-rose-300 border-rose-500/40 bg-rose-500/10',
+            )}
+          >
+            {`Consensus: ${modelConsensus.message}`}
+          </div>
+          <div className="text-[9px] text-slate-500 font-mono">
+            {`Votes T/B/S: ${modelConsensus.technical} / ${modelConsensus.bandarmology} / ${modelConsensus.sentiment}`}
           </div>
           {coolingOff.reason ? <div className="text-[9px] text-slate-500 font-mono">{coolingOff.reason}</div> : null}
           <div className="mt-2 pt-2 border-t border-slate-800 text-center">
@@ -1232,6 +1337,16 @@ export default function Home() {
     remainingSeconds: 0,
     breachStreak: 0,
     reason: null,
+  });
+  const [modelConsensus, setModelConsensus] = useState<ModelConsensus>({
+    technical: 'NEUTRAL',
+    bandarmology: 'NEUTRAL',
+    sentiment: 'NEUTRAL',
+    bullishVotes: 0,
+    bearishVotes: 0,
+    pass: false,
+    status: 'CONFUSION',
+    message: 'MARKET CONFUSION - STAND ASIDE',
   });
 
   const [infraStatus, setInfraStatus] = useState<{ sse: Tone; db: Tone; integrity: Tone; token: Tone }>({
@@ -1461,11 +1576,18 @@ export default function Home() {
       ? `KILL-SWITCH ACTIVE (IHSG ${ihsgChangePct.toFixed(2)}%, min UPS ${minUpsForLong})`
       : `NORMAL (${minUpsForLong} UPS gate)`;
 
+    const technicalVote = technicalVoteFromUps(nextUps, minUpsForLong);
+    const bandarmologyVote = bandarmologyVoteFromFlow(brokerRows);
+    const preliminarySentimentVote = global?.global_sentiment === 'BULLISH' ? 'BUY' : global?.global_sentiment === 'BEARISH' ? 'SELL' : 'NEUTRAL';
+    const preliminaryConsensus = buildConsensus(technicalVote, bandarmologyVote, preliminarySentimentVote);
+    setModelConsensus(preliminaryConsensus);
+
     setNarrative(
       `System: Analyzing ${activeSymbol} market structure...\n\n` +
         `AI: ${signalLabel(nextUps, minUpsForLong).toUpperCase()} BIAS DETECTED.\n` +
         `Price Move (${timeframe}): ${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(2)}% | Volatility: ${volClass}\n` +
         `Risk Gate: ${riskGateLabel}\n` +
+        `Consensus: ${preliminaryConsensus.message}\n` +
         `Cooling-Off: ${coolingActive ? 'ACTIVE (Recommendation Locked)' : 'Clear'}\n` +
         `Whale Flow: ${topWhales || 'No dominant whale detected'}\n` +
         `Model Confidence: ${confLabel} (${Number(confidence?.accuracy_pct || 0).toFixed(1)}%)\n\n` +
@@ -1490,30 +1612,40 @@ export default function Home() {
       if (narrativeResponse.ok) {
         const narrativeBody = (await narrativeResponse.json()) as { narrative?: string };
         const extracted = extractAdversarialNarrative(narrativeBody.narrative || '');
+        const sentimentVote = sentimentVoteFromNarrative(extracted.bullish, extracted.bearish, global?.global_sentiment);
+        setModelConsensus(buildConsensus(technicalVote, bandarmologyVote, sentimentVote));
         setAdversarialNarrative({
           bullish: extracted.bullish,
           bearish: extracted.bearish,
           source: 'ai',
         });
       } else {
+        const fallbackBullish = `Bias utama: ${signalLabel(nextUps, minUpsForLong)} | Whale: ${topWhales || 'belum dominan'}.`;
+        const fallbackBearish = coolingActive
+          ? 'Cooling-off aktif, semua rekomendasi ditahan sementara sampai lock selesai.'
+          : systemicRiskHighLocal
+            ? `Systemic risk tinggi: beta ${betaEstimateLocal.toFixed(2)} di atas threshold.`
+            : 'Risiko downside tetap ada jika volume tidak konfirmasi dan IHSG melemah.';
+        const sentimentVote = sentimentVoteFromNarrative(fallbackBullish, fallbackBearish, global?.global_sentiment);
+        setModelConsensus(buildConsensus(technicalVote, bandarmologyVote, sentimentVote));
         setAdversarialNarrative({
-          bullish: `Bias utama: ${signalLabel(nextUps, minUpsForLong)} | Whale: ${topWhales || 'belum dominan'}.`,
-          bearish: coolingActive
-            ? 'Cooling-off aktif, semua rekomendasi ditahan sementara sampai lock selesai.'
-            : systemicRiskHighLocal
-              ? `Systemic risk tinggi: beta ${betaEstimateLocal.toFixed(2)} di atas threshold.`
-              : 'Risiko downside tetap ada jika volume tidak konfirmasi dan IHSG melemah.',
+          bullish: fallbackBullish,
+          bearish: fallbackBearish,
           source: 'fallback',
         });
       }
     } catch {
+      const fallbackBullish = `Bias utama: ${signalLabel(nextUps, minUpsForLong)} | Whale: ${topWhales || 'belum dominan'}.`;
+      const fallbackBearish = coolingActive
+        ? 'Cooling-off aktif, semua rekomendasi ditahan sementara sampai lock selesai.'
+        : systemicRiskHighLocal
+          ? `Systemic risk tinggi: beta ${betaEstimateLocal.toFixed(2)} di atas threshold.`
+          : 'Risiko downside tetap ada jika volume tidak konfirmasi dan IHSG melemah.';
+      const sentimentVote = sentimentVoteFromNarrative(fallbackBullish, fallbackBearish, global?.global_sentiment);
+      setModelConsensus(buildConsensus(technicalVote, bandarmologyVote, sentimentVote));
       setAdversarialNarrative({
-        bullish: `Bias utama: ${signalLabel(nextUps, minUpsForLong)} | Whale: ${topWhales || 'belum dominan'}.`,
-        bearish: coolingActive
-          ? 'Cooling-off aktif, semua rekomendasi ditahan sementara sampai lock selesai.'
-          : systemicRiskHighLocal
-            ? `Systemic risk tinggi: beta ${betaEstimateLocal.toFixed(2)} di atas threshold.`
-            : 'Risiko downside tetap ada jika volume tidak konfirmasi dan IHSG melemah.',
+        bullish: fallbackBullish,
+        bearish: fallbackBearish,
         source: 'fallback',
       });
     }
@@ -1782,6 +1914,14 @@ export default function Home() {
       return;
     }
 
+    if (!modelConsensus.pass) {
+      setActionState({
+        busy: false,
+        message: `Alert blocked: ${modelConsensus.message}`,
+      });
+      return;
+    }
+
     setActionState({ busy: true, message: 'Sending Telegram alert...' });
     try {
       const response = await fetch('/api/telegram-alert', {
@@ -1810,6 +1950,13 @@ export default function Home() {
               beta_estimate: systemicRisk.betaEstimate,
               beta_threshold: systemicRisk.threshold,
               systemic_risk_high: systemicRisk.high,
+            },
+            consensus: {
+              status: modelConsensus.status,
+              message: modelConsensus.message,
+              technical: modelConsensus.technical,
+              bandarmology: modelConsensus.bandarmology,
+              sentiment: modelConsensus.sentiment,
             },
           },
         }),
@@ -1840,6 +1987,12 @@ export default function Home() {
     timeframe,
     upsScore,
     coolingOff.active,
+    modelConsensus.bandarmology,
+    modelConsensus.message,
+    modelConsensus.pass,
+    modelConsensus.sentiment,
+    modelConsensus.status,
+    modelConsensus.technical,
   ]);
 
   const runBacktest = useCallback(async () => {
@@ -2096,6 +2249,7 @@ export default function Home() {
         lastRiskAudit={lastRiskAudit}
         staleAudit={staleAudit}
         coolingOff={coolingOff}
+        modelConsensus={modelConsensus}
       />
     </div>
   );
