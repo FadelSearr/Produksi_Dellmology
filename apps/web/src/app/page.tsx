@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search,
   Zap,
@@ -277,6 +277,13 @@ interface RocKillSwitchState {
   hakiRatio: number;
 }
 
+interface SpoofingAlertState {
+  warning: boolean;
+  reason: string | null;
+  vanishedWalls: number;
+  avgLifetimeSeconds: number;
+}
+
 const FALLBACK_MARKET_DATA: ChartPoint[] = [
   { time: '09:00', price: 9200, volume: 4000 },
   { time: '09:30', price: 9250, volume: 3000 },
@@ -337,6 +344,10 @@ const COMBAT_MODE_VOLATILITY_PCT = envNumber('NEXT_PUBLIC_COMBAT_MODE_VOLATILITY
 const ROC_KILL_SWITCH_DROP_PCT = envNumber('NEXT_PUBLIC_ROC_KILL_SWITCH_DROP_PCT', -3);
 const ROC_KILL_SWITCH_WINDOW_POINTS = envNumber('NEXT_PUBLIC_ROC_KILL_SWITCH_WINDOW_POINTS', 5);
 const ROC_KILL_SWITCH_HAKI_RATIO_THRESHOLD = envNumber('NEXT_PUBLIC_ROC_KILL_SWITCH_HAKI_RATIO_THRESHOLD', 0.6);
+const SPOOFING_WALL_MIN_VOLUME = envNumber('NEXT_PUBLIC_SPOOFING_WALL_MIN_VOLUME', 5000);
+const SPOOFING_MAX_LIFETIME_SECONDS = envNumber('NEXT_PUBLIC_SPOOFING_MAX_LIFETIME_SECONDS', 40);
+const SPOOFING_MIN_DISAPPEARED_WALLS = Math.max(1, Math.floor(envNumber('NEXT_PUBLIC_SPOOFING_MIN_DISAPPEARED_WALLS', 2)));
+const DASHBOARD_POLL_SECONDS = 20;
 
 const ROADMAP_DEFAULTS = {
   killSwitchIhsgDropPct: -1.5,
@@ -421,11 +432,13 @@ function bandarmologyVoteFromFlow(
   artificialLiquidityWarning = false,
   brokerCharacterWarning = false,
   lateEntryWarning = false,
+  spoofingWarning = false,
 ): VoteSignal {
   if (brokers.length === 0) return 'NEUTRAL';
   if (artificialLiquidityWarning) return 'NEUTRAL';
   if (brokerCharacterWarning) return 'NEUTRAL';
   if (lateEntryWarning) return 'NEUTRAL';
+  if (spoofingWarning) return 'NEUTRAL';
 
   const whaleNet = brokers.filter((row) => row.type === 'Whale').reduce((sum, row) => sum + row.net, 0);
   const marketNet = brokers.reduce((sum, row) => sum + row.net, 0);
@@ -952,6 +965,7 @@ function RightSidebar({
   brokerCharacter,
   divergence,
   rocKillSwitch,
+  spoofing,
 }: {
   brokers: BrokerRow[];
   zData: ZScorePoint[];
@@ -959,6 +973,7 @@ function RightSidebar({
   brokerCharacter: BrokerCharacterState;
   divergence: VolumeProfileDivergenceState;
   rocKillSwitch: RocKillSwitchState;
+  spoofing: SpoofingAlertState;
 }) {
   const canRenderChart = typeof window !== 'undefined';
   const hasAlert = zData.some((item) => item.score > 2 || item.score < -2);
@@ -1062,6 +1077,18 @@ function RightSidebar({
             {`RoC ${rocKillSwitch.dropPct.toFixed(2)}% | HAKI ${(rocKillSwitch.hakiRatio * 100).toFixed(1)}% | W ${rocKillSwitch.windowPoints}`}
           </div>
           {rocKillSwitch.reason ? <div className="text-[9px] text-slate-500 font-mono mt-1">{rocKillSwitch.reason}</div> : null}
+          <div
+            className={cn(
+              'text-[9px] font-mono border rounded px-2 py-1 mt-2',
+              spoofing.warning ? 'text-rose-300 border-rose-500/40 bg-rose-500/10' : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
+            )}
+          >
+            {spoofing.warning ? 'Spoofing Alert' : 'Order Lifetime Stable'}
+          </div>
+          <div className="text-[9px] text-slate-500 font-mono mt-1">
+            {`Vanish ${spoofing.vanishedWalls} | Lifetime ${spoofing.avgLifetimeSeconds.toFixed(0)}s`}
+          </div>
+          {spoofing.reason ? <div className="text-[9px] text-slate-500 font-mono mt-1">{spoofing.reason}</div> : null}
         </div>
         <div className="flex-1 px-2 pb-2">
           {canRenderChart ? (
@@ -1586,6 +1613,14 @@ export default function Home() {
     windowPoints: Math.max(2, Math.floor(ROC_KILL_SWITCH_WINDOW_POINTS)),
     hakiRatio: 0,
   });
+  const [spoofingAlert, setSpoofingAlert] = useState<SpoofingAlertState>({
+    warning: false,
+    reason: null,
+    vanishedWalls: 0,
+    avgLifetimeSeconds: 0,
+  });
+  const bidWallAgesRef = useRef<Map<number, number>>(new Map());
+  const spoofingStreakRef = useRef(0);
 
   const [infraStatus, setInfraStatus] = useState<{ sse: Tone; db: Tone; integrity: Tone; token: Tone }>({
     sse: 'good',
@@ -1718,12 +1753,14 @@ export default function Home() {
     });
 
     const heatRows = heatmap?.heatmap || [];
+    let normalizedHeatmap: Array<{ price: number; volume: number; type: 'Bid' | 'Ask' }> = heatmapData;
     if (heatRows.length > 0) {
       const normalized = heatRows.slice(0, 40).map((item) => ({
         price: Number(item.price || 0),
         volume: Number(item.bid || 0) + Number(item.ask || 0),
         type: Number(item.bid || 0) >= Number(item.ask || 0) ? 'Bid' : 'Ask',
       })) as Array<{ price: number; volume: number; type: 'Bid' | 'Ask' }>;
+      normalizedHeatmap = normalized;
       setHeatmapData(normalized);
     }
 
@@ -1836,6 +1873,50 @@ export default function Home() {
     const upperBandSharePct = totalProfileVolume > 0 ? (upperBandVolume / totalProfileVolume) * 100 : 0;
     const upperRangePositionPct = ((lastPrice - priceMin) / priceRange) * 100;
 
+    const bidWallVolumes = normalizedHeatmap.filter((row) => row.type === 'Bid').map((row) => row.volume).sort((a, b) => a - b);
+    const bidWallThreshold = Math.max(
+      SPOOFING_WALL_MIN_VOLUME,
+      bidWallVolumes[Math.max(0, Math.floor(bidWallVolumes.length * 0.85) - 1)] || SPOOFING_WALL_MIN_VOLUME,
+    );
+    const currentLargeBidWalls = normalizedHeatmap
+      .filter((row) => row.type === 'Bid' && row.volume >= bidWallThreshold)
+      .map((row) => Math.round(row.price));
+
+    const previousAges = bidWallAgesRef.current;
+    const nextAges = new Map<number, number>();
+    currentLargeBidWalls.forEach((price) => {
+      nextAges.set(price, (previousAges.get(price) || 0) + 1);
+    });
+
+    const vanishedWalls = Array.from(previousAges.keys()).filter((price) => !nextAges.has(price));
+    const quickVanishedWalls = vanishedWalls.filter((price) => {
+      const lifetimeSeconds = (previousAges.get(price) || 0) * DASHBOARD_POLL_SECONDS;
+      return lifetimeSeconds <= SPOOFING_MAX_LIFETIME_SECONDS;
+    });
+    const nonTradedQuickWalls = quickVanishedWalls.filter((price) => {
+      const tolerance = Math.max(1, price * 0.001);
+      const tradedNearWall = profileData.some((row) => Math.abs(row.price - price) <= tolerance && row.volume > 0);
+      return !tradedNearWall;
+    });
+
+    const avgLifetimeSeconds =
+      quickVanishedWalls.length > 0
+        ? quickVanishedWalls.reduce((sum, price) => sum + (previousAges.get(price) || 0) * DASHBOARD_POLL_SECONDS, 0) / quickVanishedWalls.length
+        : 0;
+
+    const spoofingDetectedNow = nonTradedQuickWalls.length >= SPOOFING_MIN_DISAPPEARED_WALLS;
+    spoofingStreakRef.current = spoofingDetectedNow ? spoofingStreakRef.current + 1 : Math.max(0, spoofingStreakRef.current - 1);
+    const spoofingWarning = spoofingStreakRef.current >= 1;
+    setSpoofingAlert({
+      warning: spoofingWarning,
+      reason: spoofingWarning
+        ? `${nonTradedQuickWalls.length} bid wall hilang cepat (<${SPOOFING_MAX_LIFETIME_SECONDS}s) tanpa trade konfirmasi.`
+        : null,
+      vanishedWalls: nonTradedQuickWalls.length,
+      avgLifetimeSeconds,
+    });
+    bidWallAgesRef.current = nextAges;
+
     const topWhales = (brokerRows.filter((row) => row.type === 'Whale' && row.net > 0).slice(0, 2) || [])
       .map((row) => `${row.broker} ${formatCompactIDR(row.net)}`)
       .join(', ');
@@ -1899,7 +1980,13 @@ export default function Home() {
     });
 
     const technicalVote = rocCritical ? 'NEUTRAL' : technicalVoteFromUps(nextUps, minUpsForLong);
-    const bandarmologyVote = bandarmologyVoteFromFlow(brokerRows, artificialLiquidityWarning, brokerCharacterWarning, lateEntryWarning);
+    const bandarmologyVote = bandarmologyVoteFromFlow(
+      brokerRows,
+      artificialLiquidityWarning,
+      brokerCharacterWarning,
+      lateEntryWarning,
+      spoofingWarning,
+    );
     const preliminarySentimentVote = rocCritical
       ? 'NEUTRAL'
       : global?.global_sentiment === 'BULLISH'
@@ -1927,12 +2014,13 @@ export default function Home() {
         `Flow Integrity: ${artificialLiquidityWarning ? 'Artificial Liquidity Warning' : 'Healthy'}\n` +
         `BCP: ${brokerCharacterWarning ? 'Risk Profile Detected' : 'Stable'}\n` +
         `Volume Profile: ${lateEntryWarning ? 'Late Entry Warning' : 'Normal'}\n` +
+        `Order Lifetime: ${spoofingWarning ? 'Spoofing Alert' : 'Stable'}\n` +
         `RoC Kill-Switch: ${rocCritical ? 'CRITICAL: VOLATILITY SPIKE' : 'Normal'}\n` +
         `Consensus: ${preliminaryConsensus.message}\n` +
         `Cooling-Off: ${coolingActive ? 'ACTIVE (Recommendation Locked)' : 'Clear'}\n` +
         `Whale Flow: ${topWhales || 'No dominant whale detected'}\n` +
         `Model Confidence: ${confLabel} (${Number(confidence?.accuracy_pct || 0).toFixed(1)}%)\n\n` +
-        `> Recommendation: ${coolingActive ? 'Cooling-off active. Stand down and review risk.' : rocCritical ? 'CRITICAL volatility spike. Disable buy and wait stabilization.' : nextUps >= minUpsForLong ? 'Momentum entry on pullback.' : nextUps <= 40 ? 'Defensive mode, avoid aggressive entry.' : 'Wait for clearer confirmation.'}`,
+        `> Recommendation: ${coolingActive ? 'Cooling-off active. Stand down and review risk.' : rocCritical ? 'CRITICAL volatility spike. Disable buy and wait stabilization.' : spoofingWarning ? 'Spoofing risk terdeteksi. Hindari entry impulsif.' : nextUps >= minUpsForLong ? 'Momentum entry on pullback.' : nextUps <= 40 ? 'Defensive mode, avoid aggressive entry.' : 'Wait for clearer confirmation.'}`,
     );
 
     try {
@@ -2277,6 +2365,14 @@ export default function Home() {
       return;
     }
 
+    if (spoofingAlert.warning && modelConsensus.status === 'CONSENSUS_BULL') {
+      setActionState({
+        busy: false,
+        message: `Alert blocked: spoofing alert (${spoofingAlert.vanishedWalls} vanished walls)`,
+      });
+      return;
+    }
+
     if (rocKillSwitch.active && (modelConsensus.status === 'CONSENSUS_BULL' || upsScore >= minUpsForLong)) {
       setActionState({
         busy: false,
@@ -2356,6 +2452,14 @@ export default function Home() {
               haki_ratio: rocKillSwitch.hakiRatio,
               drop_threshold_pct: ROC_KILL_SWITCH_DROP_PCT,
             },
+            spoofing_alert: {
+              warning: spoofingAlert.warning,
+              reason: spoofingAlert.reason,
+              vanished_walls: spoofingAlert.vanishedWalls,
+              avg_lifetime_seconds: spoofingAlert.avgLifetimeSeconds,
+              wall_min_volume: SPOOFING_WALL_MIN_VOLUME,
+              max_lifetime_seconds: SPOOFING_MAX_LIFETIME_SECONDS,
+            },
           },
         }),
       });
@@ -2411,6 +2515,10 @@ export default function Home() {
     rocKillSwitch.dropPct,
     rocKillSwitch.windowPoints,
     rocKillSwitch.hakiRatio,
+    spoofingAlert.warning,
+    spoofingAlert.reason,
+    spoofingAlert.vanishedWalls,
+    spoofingAlert.avgLifetimeSeconds,
   ]);
 
   const runBacktest = useCallback(async () => {
@@ -2684,6 +2792,7 @@ export default function Home() {
           brokerCharacter={brokerCharacter}
           divergence={volumeProfileDivergence}
           rocKillSwitch={rocKillSwitch}
+          spoofing={spoofingAlert}
         />
       </div>
       {!combatMode.active ? (
