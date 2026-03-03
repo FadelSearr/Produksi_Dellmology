@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import Config, validate_config, setup_logging
 from dellmology.analysis.screener_api import router as screener_router
+from dellmology.analysis.runtime_api import router as runtime_router
 from broker_flow import main as broker_flow_main
 from exit_whale import main as exit_whale_main
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -41,6 +42,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(screener_router)
+app.include_router(runtime_router)
 
 
 @app.on_event("startup")

@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,7 +24,8 @@ const (
 	websocketURL        = "wss://stream.stockbit.com/stream"
 	databaseURL         = "postgresql://admin:password@localhost:5433/dellmology?sslmode=disable"
 	httpListenAddr      = ":8080"
-	reconnectWait       = 5 * time.Second
+	reconnectMinWait    = 2 * time.Second
+	reconnectMaxWait    = 60 * time.Second
 	// Risk Mitigation Config
 	rocInterval         = 5 * time.Minute // 5 minute window for RoC check
 	rocPriceDrop        = -0.10           // -10% price drop threshold
@@ -32,7 +34,10 @@ const (
 
 // --- Structs ---
 type TokenResponse struct {
-	Token string `json:"token"`
+	Token             string `json:"token"`
+	Available         bool   `json:"available"`
+	Reason            string `json:"reason"`
+	RetryAfterSeconds int    `json:"retry_after_seconds"`
 }
 type WebSocketMessage struct {
 	Type string          `json:"t"`
@@ -107,6 +112,7 @@ var (
 	quotesMutex      = &sync.RWMutex{}
 	priceHistoryMutex = &sync.Mutex{}
 	sseBroker        *Broker
+	ErrTokenUnavailable = errors.New("token unavailable")
 )
 
 // --- SSE Broker ---
@@ -205,11 +211,25 @@ func main() {
 }
 
 func runStreamer() {
+	reconnectWait := reconnectMinWait
+
 	for {
 		token, err := getAuthToken()
 		if err != nil {
+			if errors.Is(err, ErrTokenUnavailable) {
+				wait := reconnectWait
+				if wait < 15*time.Second {
+					wait = 15 * time.Second
+				}
+				log.Printf("INFO: Auth token currently unavailable (%v). Retrying in %v...", err, wait)
+				time.Sleep(wait)
+				reconnectWait = nextBackoff(reconnectWait)
+				continue
+			}
+
 			log.Printf("ERROR: Could not retrieve auth token: %v. Retrying in %v...", err, reconnectWait)
 			time.Sleep(reconnectWait)
+			reconnectWait = nextBackoff(reconnectWait)
 			continue
 		}
 		log.Printf("Successfully retrieved auth token.")
@@ -218,8 +238,11 @@ func runStreamer() {
 		if err != nil {
 			log.Printf("ERROR: Failed to connect to WebSocket: %v. Retrying in %v...", err, reconnectWait)
 			time.Sleep(reconnectWait)
+			reconnectWait = nextBackoff(reconnectWait)
 			continue
 		}
+
+		reconnectWait = reconnectMinWait
 
 		log.Println("Successfully connected to WebSocket. Listening for messages...")
 		messageLoop(conn)
@@ -227,7 +250,19 @@ func runStreamer() {
 		conn.Close()
 		log.Println("WebSocket disconnected. Attempting to reconnect...")
 		time.Sleep(reconnectWait)
+		reconnectWait = nextBackoff(reconnectWait)
 	}
+}
+
+func nextBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > reconnectMaxWait {
+		return reconnectMaxWait
+	}
+	if next < reconnectMinWait {
+		return reconnectMinWait
+	}
+	return next
 }
 
 func messageLoop(conn *websocket.Conn) {
@@ -409,6 +444,15 @@ func getAuthToken() (string, error) {
 	if err != nil { return "", err }
 	var tokenResp TokenResponse
 	if err := json.Unmarshal(body, &tokenResp); err != nil { return "", err }
-	if tokenResp.Token == "" { return "", fmt.Errorf("token not found in api response") }
+	if tokenResp.Token == "" {
+		reason := tokenResp.Reason
+		if reason == "" {
+			reason = "token not found in api response"
+		}
+		if tokenResp.RetryAfterSeconds > 0 {
+			reason = fmt.Sprintf("%s (retry_after=%ds)", reason, tokenResp.RetryAfterSeconds)
+		}
+		return "", fmt.Errorf("%w: %s", ErrTokenUnavailable, reason)
+	}
 	return tokenResp.Token, nil
 }

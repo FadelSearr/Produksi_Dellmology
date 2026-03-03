@@ -258,7 +258,7 @@ function TopNavigation({
   symbolInput: string;
   setSymbolInput: (value: string) => void;
   applySymbol: () => void;
-  infraStatus: { sse: Tone; db: Tone; integrity: Tone };
+  infraStatus: { sse: Tone; db: Tone; integrity: Tone; token: Tone };
   globalData: GlobalCorrelationResponse | null;
 }) {
   const tapeItems = [
@@ -327,6 +327,7 @@ function TopNavigation({
         <StatusDot status={infraStatus.sse} label="Go+SSE" />
         <StatusDot status={infraStatus.db} label="TimescaleDB" />
         <StatusDot status={infraStatus.integrity} label="Integrity" />
+        <StatusDot status={infraStatus.token} label="Token" />
       </div>
     </header>
   );
@@ -455,6 +456,7 @@ function CenterPanel({
   priceChange: number;
   prediction: PredictionResponse | null;
 }) {
+  const canRenderChart = typeof window !== 'undefined';
   const signalText = signalLabel(upsScore);
   const confidenceUp = Number(prediction?.data?.confidence_up || 0);
   const confidenceDown = Number(prediction?.data?.confidence_down || 0);
@@ -491,27 +493,31 @@ function CenterPanel({
 
       <div className="flex-1 flex relative">
         <div className="flex-1 relative">
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
-            <AreaChart data={marketData} margin={{ top: 80, right: 10, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-              <XAxis dataKey="time" hide />
-              <YAxis orientation="right" domain={['auto', 'auto']} stroke="#475569" fontSize={10} tickFormatter={(value) => value.toLocaleString()} />
-              <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '4px', fontSize: '12px' }} itemStyle={{ color: '#e2e8f0' }} />
-              <Area type="monotone" dataKey="price" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" />
-              <ReferenceLine
-                x={marketData[Math.max(0, Math.floor(marketData.length / 2))]?.time}
-                stroke="#06b6d4"
-                strokeDasharray="3 3"
-                label={{ position: 'top', value: `${signalText.toUpperCase()} DETECTED`, fill: '#06b6d4', fontSize: 10, fontWeight: 'bold' }}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          {canRenderChart ? (
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
+              <AreaChart data={marketData} margin={{ top: 80, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="time" hide />
+                <YAxis orientation="right" domain={['auto', 'auto']} stroke="#475569" fontSize={10} tickFormatter={(value) => value.toLocaleString()} />
+                <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '4px', fontSize: '12px' }} itemStyle={{ color: '#e2e8f0' }} />
+                <Area type="monotone" dataKey="price" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" />
+                <ReferenceLine
+                  x={marketData[Math.max(0, Math.floor(marketData.length / 2))]?.time}
+                  stroke="#06b6d4"
+                  strokeDasharray="3 3"
+                  label={{ position: 'top', value: `${signalText.toUpperCase()} DETECTED`, fill: '#06b6d4', fontSize: 10, fontWeight: 'bold' }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-full w-full" />
+          )}
 
           <div className="absolute bottom-4 left-4 pointer-events-none">
             <div className="bg-slate-900/80 backdrop-blur border border-cyan-500/30 p-2 rounded flex items-center space-x-3">
@@ -598,6 +604,7 @@ function CenterPanel({
 }
 
 function RightSidebar({ brokers, zData }: { brokers: BrokerRow[]; zData: ZScorePoint[] }) {
+  const canRenderChart = typeof window !== 'undefined';
   const hasAlert = zData.some((item) => item.score > 2 || item.score < -2);
 
   return (
@@ -647,19 +654,23 @@ function RightSidebar({ brokers, zData }: { brokers: BrokerRow[]; zData: ZScoreP
           <StatusDot status={hasAlert ? 'warning' : 'good'} label={hasAlert ? 'Alert: > 2σ' : 'Normal'} />
         </div>
         <div className="flex-1 px-2 pb-2">
-          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
-            <BarChart data={zData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-              <XAxis dataKey="time" hide />
-              <Tooltip cursor={{ fill: '#1e293b' }} contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', fontSize: '10px' }} />
-              <ReferenceLine y={0} stroke="#475569" />
-              <Bar dataKey="score" radius={[2, 2, 0, 0]}>
-                {zData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.score > 2 ? '#f59e0b' : entry.score > 0 ? '#10b981' : '#f43f5e'} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+          {canRenderChart ? (
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={1}>
+              <BarChart data={zData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="time" hide />
+                <Tooltip cursor={{ fill: '#1e293b' }} contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', fontSize: '10px' }} />
+                <ReferenceLine y={0} stroke="#475569" />
+                <Bar dataKey="score" radius={[2, 2, 0, 0]}>
+                  {zData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.score > 2 ? '#f59e0b' : entry.score > 0 ? '#10b981' : '#f43f5e'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-full w-full" />
+          )}
         </div>
       </div>
 
@@ -808,10 +819,11 @@ export default function Home() {
   const [globalData, setGlobalData] = useState<GlobalCorrelationResponse | null>(null);
   const [actionState, setActionState] = useState<ActionState>({ busy: false, message: null });
 
-  const [infraStatus, setInfraStatus] = useState<{ sse: Tone; db: Tone; integrity: Tone }>({
+  const [infraStatus, setInfraStatus] = useState<{ sse: Tone; db: Tone; integrity: Tone; token: Tone }>({
     sse: 'good',
     db: 'good',
     integrity: 'good',
+    token: 'warning',
   });
 
   const applySymbol = useCallback(() => {
@@ -843,7 +855,12 @@ export default function Home() {
     const heatmap = requests[3] as { heatmap?: HeatmapApiRow[] } | null;
     const confidence = requests[4] as ModelConfidenceResponse | null;
     const pred = requests[5] as PredictionResponse | null;
-    const health = requests[6] as { sse_connected?: boolean; db_connected?: boolean; data_integrity?: boolean } | null;
+    const health = requests[6] as {
+      sse_connected?: boolean;
+      db_connected?: boolean;
+      data_integrity?: boolean;
+      token_status?: 'fresh' | 'expiring' | 'expired' | 'missing';
+    } | null;
     const global = requests[7] as GlobalCorrelationResponse | null;
 
     const snapshotRows = (snapshots?.snapshots || [])
@@ -894,10 +911,14 @@ export default function Home() {
     setGlobalData(global);
 
     if (health) {
+      const tokenTone: Tone =
+        health.token_status === 'fresh' ? 'good' : health.token_status === 'expiring' ? 'warning' : 'error';
+
       setInfraStatus({
         sse: health.sse_connected ? 'good' : 'warning',
         db: health.db_connected ? 'good' : 'error',
         integrity: health.data_integrity ? 'good' : 'warning',
+        token: tokenTone,
       });
     }
 

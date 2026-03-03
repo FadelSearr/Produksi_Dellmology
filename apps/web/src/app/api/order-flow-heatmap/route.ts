@@ -4,6 +4,11 @@ import { createClient } from '@supabase/supabase-js';
 // Initialize Supabase client with fallbacks for build time
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key';
+const isSupabaseConfigured =
+  !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
+  !!process.env.SUPABASE_SERVICE_ROLE_KEY &&
+  !supabaseUrl.includes('placeholder.supabase.co') &&
+  supabaseKey !== 'placeholder-key';
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -70,6 +75,34 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { error: 'Symbol parameter is required' },
         { status: 400 }
+      );
+    }
+
+    if (!isSupabaseConfigured) {
+      return NextResponse.json(
+        {
+          symbol,
+          timestamp: new Date().toISOString(),
+          heatmap: { prices: [], bidVolumes: [], askVolumes: [], netVolumes: [], bidAskRatios: [], intensities: [] },
+          marketDepth: null,
+          hakaHaki: null,
+          anomalies: [],
+          stats: {
+            totalDataPoints: 0,
+            minPrice: 0,
+            maxPrice: 0,
+            avgIntensity: 0,
+            anomalyCount: 0,
+          },
+          degraded: true,
+          reason: 'Supabase is not configured; using graceful fallback payload',
+        },
+        {
+          headers: {
+            'Cache-Control': 'public, s-maxage=15, stale-while-revalidate=60',
+            'Content-Type': 'application/json',
+          },
+        },
       );
     }
 
@@ -197,6 +230,13 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    if (!isSupabaseConfigured) {
+      return NextResponse.json(
+        { error: 'Supabase is not configured' },
+        { status: 503 },
+      );
+    }
+
     const body = await request.json();
     const { symbol, price, bid_volume, ask_volume, bid_ask_ratio, intensity } = body;
 

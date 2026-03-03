@@ -79,6 +79,47 @@ export async function GET(request: Request) {
       console.error('Worker heartbeat check failed:', err);
     }
 
+    // Check session token freshness (extension heartbeat visibility)
+    let tokenAvailable = false;
+    let tokenStatus: 'fresh' | 'expiring' | 'expired' | 'missing' = 'missing';
+    let tokenExpiresInSeconds: number | null = null;
+    let tokenLastUpdatedSeconds: number | null = null;
+    try {
+      const tokenResult = await db.query(
+        "SELECT expires_at, updated_at FROM config WHERE key = 'session_token' ORDER BY updated_at DESC LIMIT 1",
+      );
+
+      if (tokenResult.rows.length > 0) {
+        const tokenRow = tokenResult.rows[0];
+        const expiresAt = tokenRow.expires_at ? new Date(tokenRow.expires_at) : null;
+        const updatedAt = tokenRow.updated_at ? new Date(tokenRow.updated_at) : null;
+        const nowMs = Date.now();
+
+        if (updatedAt && !Number.isNaN(updatedAt.getTime())) {
+          tokenLastUpdatedSeconds = Math.max(0, Math.floor((nowMs - updatedAt.getTime()) / 1000));
+        }
+
+        if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
+          tokenExpiresInSeconds = Math.floor((expiresAt.getTime() - nowMs) / 1000);
+          if (tokenExpiresInSeconds > 900) {
+            tokenAvailable = true;
+            tokenStatus = 'fresh';
+          } else if (tokenExpiresInSeconds > 0) {
+            tokenAvailable = true;
+            tokenStatus = 'expiring';
+          } else {
+            tokenAvailable = false;
+            tokenStatus = 'expired';
+          }
+        } else {
+          tokenAvailable = false;
+          tokenStatus = 'missing';
+        }
+      }
+    } catch (err) {
+      console.error('Session token health check failed:', err);
+    }
+
     const killSwitchReason =
       !isSystemActive
         ? configuredKillReason || 'Cloud kill-switch active'
@@ -96,6 +137,10 @@ export async function GET(request: Request) {
       worker_online: workerOnline,
       worker_last_seen_seconds: workerLastSeenSeconds,
       heartbeat_timeout_seconds: heartbeatTimeoutSeconds,
+      token_available: tokenAvailable,
+      token_status: tokenStatus,
+      token_expires_in_seconds: tokenExpiresInSeconds,
+      token_last_updated_seconds: tokenLastUpdatedSeconds,
       api_rate_limit: 65,   // Track from requests
       timestamp: new Date().toISOString(),
       services: {

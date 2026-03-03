@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "description": "Intercepts session token from Stockbit for Dellmology Pro.",
   "permissions": [
-    "webRequest"
+    "webRequest",
+    "storage",
+    "alarms"
   ],
   "host_permissions": [
     "https://*.stockbit.com/*",
