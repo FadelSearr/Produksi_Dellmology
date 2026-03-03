@@ -20,6 +20,17 @@ interface ProcessedTrade {
 
 const MAX_TRADES_IN_LIST = 50;
 const STREAM_URL = 'http://localhost:8080/stream';
+const CONFIG_CHAIN_ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+const OVERVIEW_FETCH_RETRY_ATTEMPTS = 3;
+const OVERVIEW_FETCH_BASE_BACKOFF_MS = 700;
+const OVERVIEW_FETCH_STALE_AFTER_MS = 2 * 60 * 1000;
+const OVERVIEW_FETCH_TIMEOUT_MS = 8_000;
+
+interface RiskConfigAlertGateResponse {
+  success?: boolean;
+  allowed?: boolean;
+  remaining_ms?: number;
+}
 
 interface BrokerEntry {
   broker_id: string;
@@ -104,6 +115,47 @@ interface RiskConfigResponse {
     confidence_miss_threshold?: number;
     confidence_horizon_minutes?: number;
     confidence_slippage_pct?: number;
+    failed_queue_alert_threshold?: number;
+  };
+  constraints?: {
+    failed_queue_alert_threshold?: {
+      min?: number;
+      max?: number;
+    };
+  };
+  updated?: {
+    failed_queue_alert_threshold?: string;
+  };
+  changed_count?: number;
+}
+
+interface RiskConfigAuditOverviewResponse {
+  success?: boolean;
+  chain?: {
+    valid?: boolean;
+    checked_rows?: number;
+    hash_mismatches?: number;
+    linkage_mismatches?: number;
+  };
+  recent_events?: Array<{
+    id: number;
+    event_type: 'LOCK' | 'UNLOCK';
+    created_at: string;
+    hash_mismatches: number;
+    linkage_mismatches: number;
+  }>;
+  latest_audit?: {
+    old_value?: string | null;
+    new_value?: string | null;
+    actor?: string | null;
+    source?: string | null;
+    record_hash?: string | null;
+    created_at?: string;
+  } | null;
+  alert_gate?: {
+    cooldown_ms?: number;
+    lock?: { remaining_ms?: number };
+    unlock?: { remaining_ms?: number };
   };
 }
 
@@ -312,6 +364,7 @@ export default function Home() {
     confidenceMissThreshold: 7,
     confidenceHorizonMinutes: 30,
     confidenceSlippagePct: 0.5,
+    failedQueueAlertThreshold: 3,
   });
   const [modelComparison, setModelComparison] = useState<{
     championVersion: string;
@@ -429,6 +482,9 @@ export default function Home() {
   const workerOnlineRef = useRef<boolean | null>(null);
   const orchestratorNightlyLockRef = useRef<boolean | null>(null);
   const refetchLockRef = useRef<boolean | null>(null);
+  const refetchFailedAlertRef = useRef<boolean | null>(null);
+  const configAuditChainRef = useRef<boolean | null>(null);
+  const overviewFetchInFlightRef = useRef(false);
   const [refetchQueue, setRefetchQueue] = useState<{
     pendingForSymbol: boolean;
     status: 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED' | null;
@@ -459,6 +515,77 @@ export default function Home() {
   }>({
     inProgress: false,
     lastMessage: null,
+  });
+  const [failedQueueThresholdDraft, setFailedQueueThresholdDraft] = useState('3');
+  const [failedQueueThresholdMeta, setFailedQueueThresholdMeta] = useState<{
+    min: number;
+    max: number;
+    updatedAt: string | null;
+    isSaving: boolean;
+    lastMessage: string | null;
+  }>({
+    min: 1,
+    max: 50,
+    updatedAt: null,
+    isSaving: false,
+    lastMessage: null,
+  });
+  const [failedQueueThresholdAudit, setFailedQueueThresholdAudit] = useState<{
+    actor: string | null;
+    source: string | null;
+    oldValue: string | null;
+    newValue: string | null;
+    recordHash: string | null;
+    changedAt: string | null;
+  }>({
+    actor: null,
+    source: null,
+    oldValue: null,
+    newValue: null,
+    recordHash: null,
+    changedAt: null,
+  });
+  const [failedQueueThresholdAuditVerify, setFailedQueueThresholdAuditVerify] = useState<{
+    valid: boolean;
+    checkedRows: number;
+    hashMismatches: number;
+    linkageMismatches: number;
+  }>({
+    valid: true,
+    checkedRows: 0,
+    hashMismatches: 0,
+    linkageMismatches: 0,
+  });
+  const [failedQueueThresholdLockEvents, setFailedQueueThresholdLockEvents] = useState<
+    Array<{
+      id: number;
+      eventType: 'LOCK' | 'UNLOCK';
+      createdAt: string;
+      hashMismatches: number;
+      linkageMismatches: number;
+    }>
+  >([]);
+  const [failedQueueThresholdGate, setFailedQueueThresholdGate] = useState<{
+    cooldownMs: number;
+    lockRemainingMs: number;
+    unlockRemainingMs: number;
+  }>({
+    cooldownMs: CONFIG_CHAIN_ALERT_COOLDOWN_MS,
+    lockRemainingMs: 0,
+    unlockRemainingMs: 0,
+  });
+  const [failedQueueOverviewSync, setFailedQueueOverviewSync] = useState<{
+    lastSuccessAt: string | null;
+    lastAttemptAt: string | null;
+    consecutiveFailures: number;
+    lastError: string | null;
+    degraded: boolean;
+  }>({
+    lastSuccessAt: null,
+    lastAttemptAt: null,
+    consecutiveFailures: 0,
+    lastError: null,
+    degraded: false,
   });
   const [betaPositions, setBetaPositions] = useState<BetaPosition[]>([
     { symbol: 'BBCA', weightPct: 40, beta: 1.1 },
@@ -505,6 +632,13 @@ export default function Home() {
   const isGlobalRiskMode = globalCorrelation.ihsgChangePct <= riskConfig.ihsgRiskTriggerPct;
   const upsMinThreshold = isGlobalRiskMode ? riskConfig.upsMinRisk : riskConfig.upsMinNormal;
   const rocThresholdPct = riskConfig.rocThresholdPct;
+  const overviewLastSuccessMs = failedQueueOverviewSync.lastSuccessAt
+    ? new Date(failedQueueOverviewSync.lastSuccessAt).getTime()
+    : NaN;
+  const overviewSyncAgeSeconds = Number.isFinite(overviewLastSuccessMs)
+    ? Math.max(0, Math.floor((Date.now() - overviewLastSuccessMs) / 1000))
+    : null;
+  const isOverviewSyncStale = overviewSyncAgeSeconds !== null && overviewSyncAgeSeconds * 1000 > OVERVIEW_FETCH_STALE_AFTER_MS;
 
   const recentTrades5m = trades.filter((trade) => {
     if (!trade.timestamp) {
@@ -641,6 +775,183 @@ export default function Home() {
     }
   };
 
+  const saveFailedQueueThreshold = async () => {
+    if (failedQueueThresholdMeta.isSaving) {
+      return;
+    }
+
+    if (!failedQueueThresholdAuditVerify.valid) {
+      setFailedQueueThresholdMeta((prev) => ({
+        ...prev,
+        lastMessage: 'Update locked: runtime config audit chain is BROKEN',
+      }));
+      return;
+    }
+
+    const parsed = Number(failedQueueThresholdDraft);
+    if (!Number.isFinite(parsed)) {
+      setFailedQueueThresholdMeta((prev) => ({
+        ...prev,
+        lastMessage: 'Invalid threshold: must be numeric',
+      }));
+      return;
+    }
+
+    if (parsed < failedQueueThresholdMeta.min || parsed > failedQueueThresholdMeta.max) {
+      setFailedQueueThresholdMeta((prev) => ({
+        ...prev,
+        lastMessage: `Threshold out of range (${prev.min}-${prev.max})`,
+      }));
+      return;
+    }
+
+    try {
+      setFailedQueueThresholdMeta((prev) => ({ ...prev, isSaving: true, lastMessage: null }));
+
+      const response = await fetch('/api/risk-config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-operator-id': 'web-dashboard',
+          'x-config-source': 'action-dock-threshold-control',
+        },
+        body: JSON.stringify({ failed_queue_alert_threshold: parsed }),
+      });
+
+      const data = (await response.json()) as RiskConfigResponse & { error?: string; min?: number; max?: number; lock?: boolean };
+      if (!response.ok) {
+        const rangeHint =
+          Number.isFinite(Number(data.min)) && Number.isFinite(Number(data.max))
+            ? ` (${Number(data.min)}-${Number(data.max)})`
+            : '';
+        const lockHint = data.lock ? ' [LOCKED]' : '';
+        throw new Error(data.error ? `${data.error}${rangeHint}${lockHint}` : `Update failed (${response.status})`);
+      }
+
+      const nextValue = Number(data.config?.failed_queue_alert_threshold ?? parsed);
+      const min = Number(data.constraints?.failed_queue_alert_threshold?.min ?? failedQueueThresholdMeta.min);
+      const max = Number(data.constraints?.failed_queue_alert_threshold?.max ?? failedQueueThresholdMeta.max);
+      const updatedAt = data.updated?.failed_queue_alert_threshold || new Date().toISOString();
+
+      setRiskConfig((prev) => ({
+        ...prev,
+        failedQueueAlertThreshold: nextValue,
+      }));
+      setFailedQueueThresholdDraft(String(nextValue));
+      setFailedQueueThresholdMeta((prev) => ({
+        ...prev,
+        min,
+        max,
+        updatedAt,
+        isSaving: false,
+        lastMessage: `Threshold updated to ${nextValue} (changes: ${Number(data.changed_count || 0)})`,
+      }));
+      fetchFailedQueueThresholdAuditOverview().catch(() => {
+        // noop
+      });
+    } catch (error) {
+      setFailedQueueThresholdMeta((prev) => ({
+        ...prev,
+        isSaving: false,
+        lastMessage: error instanceof Error ? `Threshold update error: ${error.message}` : 'Threshold update error',
+      }));
+    }
+  };
+
+  const fetchFailedQueueThresholdAuditOverview = async () => {
+    if (overviewFetchInFlightRef.current) {
+      return;
+    }
+
+    overviewFetchInFlightRef.current = true;
+    const nowIso = new Date().toISOString();
+    setFailedQueueOverviewSync((prev) => ({ ...prev, lastAttemptAt: nowIso }));
+
+    try {
+      for (let attempt = 0; attempt < OVERVIEW_FETCH_RETRY_ATTEMPTS; attempt += 1) {
+        if (attempt > 0) {
+          const jitter = Math.floor(Math.random() * 250);
+          const backoffMs = OVERVIEW_FETCH_BASE_BACKOFF_MS * 2 ** (attempt - 1) + jitter;
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        }
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), OVERVIEW_FETCH_TIMEOUT_MS);
+          const response = await fetch('/api/risk-config/audit/overview?key=failed_queue_alert_threshold&verify_limit=200&event_limit=5', {
+            signal: controller.signal,
+          }).finally(() => {
+            clearTimeout(timeoutId);
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const data = (await response.json()) as RiskConfigAuditOverviewResponse;
+          setFailedQueueThresholdAuditVerify({
+            valid: data.chain?.valid !== false,
+            checkedRows: Number(data.chain?.checked_rows || 0),
+            hashMismatches: Number(data.chain?.hash_mismatches || 0),
+            linkageMismatches: Number(data.chain?.linkage_mismatches || 0),
+          });
+          setFailedQueueThresholdLockEvents(
+            (data.recent_events || []).map((event) => ({
+              id: event.id,
+              eventType: event.event_type,
+              createdAt: event.created_at,
+              hashMismatches: Number(event.hash_mismatches || 0),
+              linkageMismatches: Number(event.linkage_mismatches || 0),
+            })),
+          );
+          setFailedQueueThresholdGate({
+            cooldownMs: Number(data.alert_gate?.cooldown_ms || CONFIG_CHAIN_ALERT_COOLDOWN_MS),
+            lockRemainingMs: Number(data.alert_gate?.lock?.remaining_ms || 0),
+            unlockRemainingMs: Number(data.alert_gate?.unlock?.remaining_ms || 0),
+          });
+
+          if (data.latest_audit) {
+            setFailedQueueThresholdAudit({
+              actor: data.latest_audit.actor || null,
+              source: data.latest_audit.source || null,
+              oldValue: data.latest_audit.old_value || null,
+              newValue: data.latest_audit.new_value || null,
+              recordHash: data.latest_audit.record_hash || null,
+              changedAt: data.latest_audit.created_at || null,
+            });
+          }
+
+          setFailedQueueOverviewSync((prev) => ({
+            ...prev,
+            lastSuccessAt: new Date().toISOString(),
+            consecutiveFailures: 0,
+            lastError: null,
+            degraded: false,
+          }));
+          return;
+        } catch (error) {
+          const message =
+            error instanceof DOMException && error.name === 'AbortError'
+              ? `timeout > ${Math.floor(OVERVIEW_FETCH_TIMEOUT_MS / 1000)}s`
+              : error instanceof Error
+                ? error.message
+                : 'unknown error';
+          const isLastAttempt = attempt === OVERVIEW_FETCH_RETRY_ATTEMPTS - 1;
+          if (isLastAttempt) {
+            setFailedQueueOverviewSync((prev) => ({
+              ...prev,
+              consecutiveFailures: prev.consecutiveFailures + 1,
+              lastError: message,
+              degraded: true,
+            }));
+            console.error('Risk config audit overview fetch failed:', error);
+          }
+        }
+      }
+    } finally {
+      overviewFetchInFlightRef.current = false;
+    }
+  };
+
   // Fetch trades via SSE
   useEffect(() => {
     const eventSource = new EventSource(STREAM_URL);
@@ -769,6 +1080,14 @@ export default function Home() {
           confidenceMissThreshold: Number(data.config?.confidence_miss_threshold ?? prev.confidenceMissThreshold),
           confidenceHorizonMinutes: Number(data.config?.confidence_horizon_minutes ?? prev.confidenceHorizonMinutes),
           confidenceSlippagePct: Number(data.config?.confidence_slippage_pct ?? prev.confidenceSlippagePct),
+          failedQueueAlertThreshold: Number(data.config?.failed_queue_alert_threshold ?? prev.failedQueueAlertThreshold),
+        }));
+        setFailedQueueThresholdDraft(String(Number(data.config?.failed_queue_alert_threshold ?? 3)));
+        setFailedQueueThresholdMeta((prev) => ({
+          ...prev,
+          min: Number(data.constraints?.failed_queue_alert_threshold?.min ?? prev.min),
+          max: Number(data.constraints?.failed_queue_alert_threshold?.max ?? prev.max),
+          updatedAt: data.updated?.failed_queue_alert_threshold || prev.updatedAt,
         }));
       } catch (error) {
         console.error('Risk config fetch failed:', error);
@@ -776,11 +1095,14 @@ export default function Home() {
     };
 
     fetchRiskConfig();
+    fetchFailedQueueThresholdAuditOverview();
     const interval = setInterval(fetchRiskConfig, 60_000);
+    const auditOverviewInterval = setInterval(fetchFailedQueueThresholdAuditOverview, 60_000);
 
     return () => {
       mounted = false;
       clearInterval(interval);
+      clearInterval(auditOverviewInterval);
     };
   }, []);
 
@@ -893,6 +1215,77 @@ export default function Home() {
   }, [symbol]);
 
   useEffect(() => {
+    const previous = configAuditChainRef.current;
+    configAuditChainRef.current = failedQueueThresholdAuditVerify.valid;
+
+    const notifyWithGate = async (eventType: 'LOCK' | 'UNLOCK', alert: string, extraData: Record<string, number>) => {
+      try {
+        const gateResponse = await fetch('/api/risk-config/audit/alert-gate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chain_key: 'failed_queue_alert_threshold',
+            event_type: eventType,
+            cooldown_ms: CONFIG_CHAIN_ALERT_COOLDOWN_MS,
+          }),
+        });
+
+        if (!gateResponse.ok) {
+          return;
+        }
+
+        const gate = (await gateResponse.json()) as RiskConfigAlertGateResponse;
+        if (gate.allowed !== true) {
+          setFailedQueueThresholdMeta((prev) => ({
+            ...prev,
+            lastMessage: `${eventType} alert suppressed by server cooldown (${Math.ceil(Number(gate.remaining_ms || 0) / 1000)}s)`,
+          }));
+          return;
+        }
+
+        fetch('/api/telegram-alert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'market',
+            symbol: 'SYSTEM',
+            data: {
+              alert,
+              checked_rows: failedQueueThresholdAuditVerify.checkedRows,
+              cooldown_ms: CONFIG_CHAIN_ALERT_COOLDOWN_MS,
+              ...extraData,
+            },
+          }),
+        }).catch((error) => {
+          console.error('Risk-config audit chain Telegram alert failed:', error);
+        });
+      } catch (error) {
+        console.error('Risk-config alert gate failed:', error);
+      }
+    };
+
+    if (previous === true && failedQueueThresholdAuditVerify.valid === false) {
+      notifyWithGate('LOCK', 'RUNTIME CONFIG AUDIT CHAIN BROKEN - UPDATE LOCKED', {
+        hash_mismatches: failedQueueThresholdAuditVerify.hashMismatches,
+        linkage_mismatches: failedQueueThresholdAuditVerify.linkageMismatches,
+      }).catch(() => {
+        // noop
+      });
+    }
+
+    if (previous === false && failedQueueThresholdAuditVerify.valid === true) {
+      notifyWithGate('UNLOCK', 'RUNTIME CONFIG AUDIT CHAIN RECOVERED - UPDATE UNLOCKED', {}).catch(() => {
+        // noop
+      });
+    }
+  }, [
+    failedQueueThresholdAuditVerify.valid,
+    failedQueueThresholdAuditVerify.checkedRows,
+    failedQueueThresholdAuditVerify.hashMismatches,
+    failedQueueThresholdAuditVerify.linkageMismatches,
+  ]);
+
+  useEffect(() => {
     const previous = refetchLockRef.current;
     refetchLockRef.current = refetchQueue.pendingForSymbol;
 
@@ -916,6 +1309,39 @@ export default function Home() {
       });
     }
   }, [symbol, refetchQueue.pendingForSymbol, refetchQueue.status, refetchQueue.reason, refetchQueue.runDateWib]);
+
+  useEffect(() => {
+    const isAboveThreshold = refetchQueueSummary.failed >= riskConfig.failedQueueAlertThreshold;
+    const previous = refetchFailedAlertRef.current;
+    refetchFailedAlertRef.current = isAboveThreshold;
+
+    if (previous === false && isAboveThreshold) {
+      fetch('/api/telegram-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'market',
+          symbol: 'SYSTEM',
+          data: {
+            alert: 'REFETCH QUEUE FAILED THRESHOLD BREACHED',
+            threshold: riskConfig.failedQueueAlertThreshold,
+            failed: refetchQueueSummary.failed,
+            pending: refetchQueueSummary.pending,
+            processing: refetchQueueSummary.processing,
+            total: refetchQueueSummary.total,
+          },
+        }),
+      }).catch((error) => {
+        console.error('Refetch failed-threshold Telegram alert failed:', error);
+      });
+    }
+  }, [
+    refetchQueueSummary.failed,
+    refetchQueueSummary.pending,
+    refetchQueueSummary.processing,
+    refetchQueueSummary.total,
+    riskConfig.failedQueueAlertThreshold,
+  ]);
 
   useEffect(() => {
     const previous = workerOnlineRef.current;
@@ -2211,6 +2637,70 @@ export default function Home() {
                     >
                       <Bell className="w-4 h-4" /> {retryFailedState.inProgress ? 'Retrying Failed Queue...' : 'Retry Failed Queue'}
                     </button>
+                    <div className="rounded border border-gray-700 bg-gray-900/40 px-2 py-2 text-[10px] text-gray-400">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span>Failed Queue Alert Threshold</span>
+                        <span>range {failedQueueThresholdMeta.min}-{failedQueueThresholdMeta.max}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min={failedQueueThresholdMeta.min}
+                          max={failedQueueThresholdMeta.max}
+                          step={1}
+                          disabled={!failedQueueThresholdAuditVerify.valid}
+                          value={failedQueueThresholdDraft}
+                          onChange={(event) => setFailedQueueThresholdDraft(event.target.value)}
+                          className={`w-full rounded border px-2 py-1 text-[11px] outline-none ${
+                            failedQueueThresholdAuditVerify.valid
+                              ? 'border-gray-700 bg-gray-950 text-gray-200 focus:border-cyan-700'
+                              : 'border-red-800 bg-red-950/20 text-red-300 cursor-not-allowed'
+                          }`}
+                        />
+                        <button
+                          onClick={saveFailedQueueThreshold}
+                          disabled={failedQueueThresholdMeta.isSaving || !failedQueueThresholdAuditVerify.valid}
+                          className={`rounded border px-2 py-1 text-[10px] ${
+                            failedQueueThresholdMeta.isSaving || !failedQueueThresholdAuditVerify.valid
+                              ? 'border-gray-700 bg-gray-800/60 text-gray-500 cursor-not-allowed'
+                              : 'border-cyan-700 bg-cyan-900/20 text-cyan-300 hover:bg-cyan-900/30'
+                          }`}
+                        >
+                          {failedQueueThresholdMeta.isSaving ? 'Saving...' : !failedQueueThresholdAuditVerify.valid ? 'Locked' : 'Save'}
+                        </button>
+                      </div>
+                      <div className="mt-1 text-[10px] text-gray-500">
+                        Applied: {riskConfig.failedQueueAlertThreshold}
+                        {failedQueueThresholdMeta.updatedAt ? ` • updated ${new Date(failedQueueThresholdMeta.updatedAt).toLocaleTimeString()}` : ''}
+                      </div>
+                      <div className="mt-1 text-[10px] text-gray-500">
+                        Audit: {failedQueueThresholdAudit.recordHash ? `${failedQueueThresholdAudit.recordHash.slice(0, 12)}...` : 'n/a'}
+                        {failedQueueThresholdAudit.actor ? ` • by ${failedQueueThresholdAudit.actor}` : ''}
+                        {failedQueueThresholdAudit.changedAt ? ` • ${new Date(failedQueueThresholdAudit.changedAt).toLocaleTimeString()}` : ''}
+                      </div>
+                      <div className={`mt-1 text-[10px] ${failedQueueThresholdAuditVerify.valid ? 'text-emerald-400' : 'text-red-300'}`}>
+                        Chain: {failedQueueThresholdAuditVerify.valid ? 'OK' : 'BROKEN'} • {failedQueueThresholdAuditVerify.checkedRows} rows
+                        {!failedQueueThresholdAuditVerify.valid
+                          ? ` • H${failedQueueThresholdAuditVerify.hashMismatches}/L${failedQueueThresholdAuditVerify.linkageMismatches}`
+                          : ''}
+                      </div>
+                      <div className="mt-1 text-[10px] text-gray-500">
+                        Gate: L {Math.ceil(failedQueueThresholdGate.lockRemainingMs / 1000)}s • U {Math.ceil(failedQueueThresholdGate.unlockRemainingMs / 1000)}s
+                      </div>
+                      <div className={`mt-1 text-[10px] ${failedQueueOverviewSync.degraded || isOverviewSyncStale ? 'text-yellow-300' : 'text-gray-500'}`}>
+                        Overview Sync: {failedQueueOverviewSync.degraded || isOverviewSyncStale ? 'DEGRADED' : 'OK'}
+                        {overviewSyncAgeSeconds !== null ? ` • ${overviewSyncAgeSeconds}s ago` : ' • n/a'}
+                        {failedQueueOverviewSync.consecutiveFailures > 0 ? ` • fail x${failedQueueOverviewSync.consecutiveFailures}` : ''}
+                        {failedQueueOverviewSync.lastError ? ` • ${failedQueueOverviewSync.lastError}` : ''}
+                      </div>
+                      {failedQueueThresholdLockEvents[0] && (
+                        <div className="mt-1 text-[10px] text-gray-500">
+                          Last Event: {failedQueueThresholdLockEvents[0].eventType}
+                          {' '}• {new Date(failedQueueThresholdLockEvents[0].createdAt).toLocaleTimeString()}
+                          {' '}• H{failedQueueThresholdLockEvents[0].hashMismatches}/L{failedQueueThresholdLockEvents[0].linkageMismatches}
+                        </div>
+                      )}
+                    </div>
 
                     {!isCombatMode && (
                       <>
@@ -2261,11 +2751,16 @@ export default function Home() {
                           Re-fetch Queue ({symbol}): {refetchQueue.status ? `${refetchQueue.status} • ${refetchQueue.reason || 'n/a'}` : 'CLEAR'}
                         </div>
                         <div className={`rounded border px-2 py-1.5 text-[10px] ${refetchQueueSummary.failed > 0 ? 'border-red-700 bg-red-900/20 text-red-300' : refetchQueueSummary.pending + refetchQueueSummary.processing > 0 ? 'border-yellow-700 bg-yellow-900/20 text-yellow-300' : 'border-gray-700 bg-gray-900/40 text-gray-400'}`}>
-                          Queue Global: P {refetchQueueSummary.pending} • X {refetchQueueSummary.processing} • D {refetchQueueSummary.done} • F {refetchQueueSummary.failed} • T {refetchQueueSummary.total}
+                          Queue Global: P {refetchQueueSummary.pending} • X {refetchQueueSummary.processing} • D {refetchQueueSummary.done} • F {refetchQueueSummary.failed} • T {refetchQueueSummary.total} • alert@{riskConfig.failedQueueAlertThreshold}
                         </div>
                         {retryFailedState.lastMessage && (
                           <div className="rounded border border-gray-700 bg-gray-900/40 px-2 py-1.5 text-[10px] text-gray-400">
                             {retryFailedState.lastMessage}
+                          </div>
+                        )}
+                        {failedQueueThresholdMeta.lastMessage && (
+                          <div className="rounded border border-gray-700 bg-gray-900/40 px-2 py-1.5 text-[10px] text-gray-400">
+                            {failedQueueThresholdMeta.lastMessage}
                           </div>
                         )}
                       </>
