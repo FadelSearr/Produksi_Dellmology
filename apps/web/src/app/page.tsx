@@ -170,6 +170,8 @@ interface RuleEnginePostmortemState {
   summaryEvaluatedSignals: number;
 }
 
+type RuleEnginePostmortemModeFilter = 'ALL' | 'BASELINE' | 'CUSTOM';
+
 interface PredictionResponse {
   success?: boolean;
   data?: {
@@ -1710,6 +1712,10 @@ function BottomPanel({
   confidence,
   confidenceTracking,
   ruleEnginePostmortem,
+  ruleEnginePostmortemModeFilter,
+  ruleEnginePostmortemVersionFilter,
+  onRuleEnginePostmortemModeFilterChange,
+  onRuleEnginePostmortemVersionFilterChange,
   latencyMs,
   activeSymbol,
   upsScore,
@@ -1761,6 +1767,10 @@ function BottomPanel({
   confidence: ModelConfidenceResponse | null;
   confidenceTracking: ModelConfidenceTracking;
   ruleEnginePostmortem: RuleEnginePostmortemState;
+  ruleEnginePostmortemModeFilter: RuleEnginePostmortemModeFilter;
+  ruleEnginePostmortemVersionFilter: string;
+  onRuleEnginePostmortemModeFilterChange: (value: RuleEnginePostmortemModeFilter) => void;
+  onRuleEnginePostmortemVersionFilterChange: (value: string) => void;
   latencyMs: number;
   activeSymbol: string;
   upsScore: number;
@@ -1809,8 +1819,27 @@ function BottomPanel({
 }) {
   const label = confidenceTracking.warning ? 'LOW' : confidence?.confidence_label || 'MEDIUM';
   const accuracy = confidenceTracking.evaluated > 0 ? confidenceTracking.accuracyPct : Number(confidence?.accuracy_pct || 0);
+  const modeFilteredRows =
+    ruleEnginePostmortemModeFilter === 'ALL'
+      ? ruleEnginePostmortem.rows
+      : ruleEnginePostmortem.rows.filter((row) => row.rule_engine_mode === ruleEnginePostmortemModeFilter);
+  const versionFilteredRows =
+    ruleEnginePostmortemVersionFilter === 'ALL'
+      ? modeFilteredRows
+      : modeFilteredRows.filter((row) => row.rule_engine_version === ruleEnginePostmortemVersionFilter);
   const postmortemCurrentRule =
-    ruleEnginePostmortem.rows.find((row) => row.rule_engine_version === runtimeRuleEngineVersion) || ruleEnginePostmortem.rows[0] || null;
+    versionFilteredRows.find((row) => row.rule_engine_version === runtimeRuleEngineVersion) || versionFilteredRows[0] || null;
+  const postmortemVersionOptions = Array.from(new Set(modeFilteredRows.map((row) => row.rule_engine_version))).slice(0, 6);
+  const filteredPostmortemSummary = versionFilteredRows.reduce(
+    (acc, row) => {
+      acc.evaluated += row.evaluated_signals;
+      acc.hits += row.hits;
+      return acc;
+    },
+    { evaluated: 0, hits: 0 },
+  );
+  const filteredPostmortemAccuracy =
+    filteredPostmortemSummary.evaluated > 0 ? (filteredPostmortemSummary.hits / filteredPostmortemSummary.evaluated) * 100 : 0;
   const coolingTriggerLabel = coolingTriggerFromReason(coolingOff.reason, coolingOff.active);
   const coolingLastTriggerLabel = coolingOff.lastBreachAt ? new Date(coolingOff.lastBreachAt).toLocaleString('id-ID') : '-';
   const engineHeartbeatLocked = engineHeartbeat.checkedAt !== null && !engineHeartbeat.online;
@@ -1886,6 +1915,27 @@ function BottomPanel({
             {confidenceTracking.warning ? <div className="text-[9px] text-rose-400 font-bold mt-1">{confidenceTracking.reason}</div> : null}
             <div className="mt-2 border border-slate-800 rounded px-2 py-1 bg-slate-950/60 text-[9px] font-mono text-slate-400">
               <div className="text-slate-500 uppercase tracking-wider">Rule Engine Post-Mortem</div>
+              <div className="mt-1 grid grid-cols-2 gap-1">
+                <select
+                  value={ruleEnginePostmortemModeFilter}
+                  onChange={(event) => onRuleEnginePostmortemModeFilterChange(event.target.value as RuleEnginePostmortemModeFilter)}
+                  className="bg-slate-950 border border-slate-800 text-slate-300 text-[9px] px-1 py-1 rounded"
+                >
+                  <option value="ALL">MODE: ALL</option>
+                  <option value="BASELINE">MODE: BASELINE</option>
+                  <option value="CUSTOM">MODE: CUSTOM</option>
+                </select>
+                <select
+                  value={ruleEnginePostmortemVersionFilter}
+                  onChange={(event) => onRuleEnginePostmortemVersionFilterChange(event.target.value)}
+                  className="bg-slate-950 border border-slate-800 text-slate-300 text-[9px] px-1 py-1 rounded"
+                >
+                  <option value="ALL">VER: ALL</option>
+                  {postmortemVersionOptions.map((version) => (
+                    <option key={version} value={version}>{version}</option>
+                  ))}
+                </select>
+              </div>
               {postmortemCurrentRule ? (
                 <>
                   <div className="mt-1 text-cyan-400">
@@ -1897,6 +1947,9 @@ function BottomPanel({
               ) : (
                 <div className="mt-1 text-slate-500">Belum ada data post-mortem yang tervalidasi.</div>
               )}
+              <div className="mt-1 text-slate-500">
+                {`Filtered Eval: ${filteredPostmortemSummary.evaluated} | Filtered Acc: ${filteredPostmortemAccuracy.toFixed(1)}%`}
+              </div>
               <div className="mt-1 text-slate-500">
                 {`Global Eval: ${ruleEnginePostmortem.summaryEvaluatedSignals} | Global Acc: ${ruleEnginePostmortem.summaryAccuracyPct.toFixed(1)}%`}
               </div>
@@ -2217,6 +2270,8 @@ export default function Home() {
     summaryAccuracyPct: 0,
     summaryEvaluatedSignals: 0,
   });
+  const [ruleEnginePostmortemModeFilter, setRuleEnginePostmortemModeFilter] = useState<RuleEnginePostmortemModeFilter>('ALL');
+  const [ruleEnginePostmortemVersionFilter, setRuleEnginePostmortemVersionFilter] = useState('ALL');
   const [prediction, setPrediction] = useState<PredictionResponse | null>(null);
   const [narrative, setNarrative] = useState('System: Waiting for market stream...');
   const [adversarialNarrative, setAdversarialNarrative] = useState<AdversarialNarrative>({
@@ -3498,6 +3553,22 @@ export default function Home() {
       window.clearInterval(timer);
     };
   }, [deadmanResetCooldown]);
+
+  useEffect(() => {
+    if (ruleEnginePostmortemVersionFilter === 'ALL') {
+      return;
+    }
+
+    const modeFilteredRows =
+      ruleEnginePostmortemModeFilter === 'ALL'
+        ? ruleEnginePostmortem.rows
+        : ruleEnginePostmortem.rows.filter((row) => row.rule_engine_mode === ruleEnginePostmortemModeFilter);
+
+    const versionExists = modeFilteredRows.some((row) => row.rule_engine_version === ruleEnginePostmortemVersionFilter);
+    if (!versionExists) {
+      setRuleEnginePostmortemVersionFilter('ALL');
+    }
+  }, [ruleEnginePostmortem.rows, ruleEnginePostmortemModeFilter, ruleEnginePostmortemVersionFilter]);
 
   const currentPrice = marketData[marketData.length - 1]?.price || FALLBACK_MARKET_DATA[FALLBACK_MARKET_DATA.length - 1].price;
   const basePrice = marketData[0]?.price || FALLBACK_MARKET_DATA[0].price;
@@ -4799,6 +4870,13 @@ export default function Home() {
           confidence={modelConfidence}
           confidenceTracking={confidenceTracking}
           ruleEnginePostmortem={ruleEnginePostmortem}
+          ruleEnginePostmortemModeFilter={ruleEnginePostmortemModeFilter}
+          ruleEnginePostmortemVersionFilter={ruleEnginePostmortemVersionFilter}
+          onRuleEnginePostmortemModeFilterChange={(value) => {
+            setRuleEnginePostmortemModeFilter(value);
+            setRuleEnginePostmortemVersionFilter('ALL');
+          }}
+          onRuleEnginePostmortemVersionFilterChange={setRuleEnginePostmortemVersionFilter}
           latencyMs={latencyMs}
           activeSymbol={activeSymbol}
           upsScore={upsScore}
