@@ -881,6 +881,7 @@ function TopNavigation({
   setSymbolInput,
   applySymbol,
   coolingOffActive,
+  combatMode,
   infraStatus,
   globalData,
 }: {
@@ -888,6 +889,7 @@ function TopNavigation({
   setSymbolInput: (value: string) => void;
   applySymbol: () => void;
   coolingOffActive: boolean;
+  combatMode: CombatModeState;
   infraStatus: { sse: Tone; db: Tone; integrity: Tone; token: Tone };
   globalData: GlobalCorrelationResponse | null;
 }) {
@@ -956,6 +958,15 @@ function TopNavigation({
       </div>
 
       <div className="flex items-center space-x-4 border-l border-slate-800 pl-4">
+        <div
+          className={cn(
+            'text-[10px] font-mono border rounded px-2 py-1',
+            combatMode.active ? 'text-rose-300 border-rose-500/40 bg-rose-500/10' : 'text-slate-500 border-slate-800 bg-slate-900/30',
+          )}
+          title={combatMode.reason}
+        >
+          {combatMode.active ? 'COMBAT MODE ON' : 'COMBAT MODE OFF'}
+        </div>
         <StatusDot status={infraStatus.sse} label="Go+SSE" />
         <StatusDot status={infraStatus.db} label="TimescaleDB" />
         <StatusDot status={infraStatus.integrity} label="Integrity" />
@@ -4916,6 +4927,7 @@ export default function Home() {
         setSymbolInput={setSymbolInput}
         applySymbol={applySymbol}
         coolingOffActive={coolingOff.active}
+        combatMode={combatMode}
         infraStatus={infraStatus}
         globalData={globalData}
       />
