@@ -908,6 +908,7 @@ function TopNavigation({
   washSaleRisk,
   icebergRisk,
   exitWhale,
+  negotiatedFeed,
   engineHeartbeat,
   goldenRecord,
   marketIntelAdapter,
@@ -947,6 +948,7 @@ function TopNavigation({
   washSaleRisk: WashSaleRiskState;
   icebergRisk: IcebergRiskState;
   exitWhale: ExitWhaleRiskState;
+  negotiatedFeed: Array<{ symbol: string; trade_type: string; volume: number; notional: number }>;
   engineHeartbeat: EngineHeartbeatState;
   goldenRecord: GoldenRecordValidationState;
   marketIntelAdapter: AdapterHealthState;
@@ -965,6 +967,8 @@ function TopNavigation({
 
   const correlationLabel = Number(globalData?.correlation_strength || 0) >= 0.7 ? 'HIGH' : Number(globalData?.correlation_strength || 0) >= 0.45 ? 'MEDIUM' : 'LOW';
   const tokenAlert = tokenTelemetry.status !== 'fresh' || tokenTelemetry.deadmanTriggered;
+  const negotiatedNotionalTotal = negotiatedFeed.reduce((total, item) => total + Math.max(0, Number(item.notional) || 0), 0);
+  const negotiatedTop = negotiatedFeed[0] || null;
 
   return (
     <header className="h-12 bg-slate-950 border-b border-slate-800 flex items-center px-4 justify-between shrink-0 z-50">
@@ -1225,6 +1229,19 @@ function TopNavigation({
           title={exitWhale.reason || `Signal ${exitWhale.signal} (${exitWhale.confidence.toFixed(0)}) | Events ${exitWhale.strongEventCount}/${exitWhale.eventCount}`}
         >
           {`EXIT ${exitWhale.warning ? 'WARN' : 'OK'}`}
+        </div>
+        <div
+          className={cn(
+            'text-[10px] font-mono border rounded px-2 py-1',
+            negotiatedFeed.length > 0 ? 'text-amber-300 border-amber-500/40 bg-amber-500/10' : 'text-slate-500 border-slate-800 bg-slate-900/30',
+          )}
+          title={
+            negotiatedTop
+              ? `${negotiatedTop.symbol} ${negotiatedTop.trade_type} | Vol ${negotiatedTop.volume.toLocaleString('en-US')} | Notional ${negotiatedTop.notional.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+              : 'No negotiated/cross activity detected'
+          }
+        >
+          {`NEGO ${negotiatedFeed.length > 0 ? `ACT ${negotiatedFeed.length}` : 'IDLE'}${negotiatedNotionalTotal > 0 ? ` ${Math.round(negotiatedNotionalTotal / 1_000_000)}M` : ''}`}
         </div>
         <div
           className={cn(
@@ -5289,6 +5306,7 @@ export default function Home() {
         washSaleRisk={washSaleRisk}
         icebergRisk={icebergRisk}
         exitWhale={exitWhaleRisk}
+        negotiatedFeed={negotiatedFeed}
         engineHeartbeat={engineHeartbeat}
         goldenRecord={goldenRecordValidation}
         marketIntelAdapter={marketIntelAdapter}
