@@ -49,9 +49,11 @@ export default function BacktestRunner() {
   })
   const [result, setResult] = useState<BacktestResult | null>(null)
   const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
 
   const run = async () => {
     setLoading(true)
+    setMessage(null)
     try {
       const resp = await fetch('/api/backtest', {
         method: 'POST',
@@ -59,14 +61,22 @@ export default function BacktestRunner() {
         body: JSON.stringify(input)
       })
       const json = await resp.json()
+
+      if (resp.status === 423) {
+        setMessage(`Backtest locked: ${json.error || 'immutable audit chain lock active'}`)
+        setResult(null)
+        return
+      }
+
       if (json.success) {
         setResult(json.result)
+        setMessage(null)
       } else {
-        alert('Error: ' + json.error)
+        setMessage(`Error: ${json.error || 'Failed to run backtest'}`)
       }
     } catch (e) {
       console.error('Backtest error', e)
-      alert('Failed to run backtest')
+      setMessage('Failed to run backtest')
     } finally {
       setLoading(false)
     }
@@ -74,6 +84,7 @@ export default function BacktestRunner() {
 
   const reset = () => {
     setResult(null)
+    setMessage(null)
   }
 
   return (
@@ -123,6 +134,12 @@ export default function BacktestRunner() {
           <RefreshCcw size={14} /> Reset
         </button>
       </div>
+
+      {message && (
+        <div className="bg-red-900/20 border border-red-700 rounded px-3 py-2 text-xs text-red-300">
+          {message}
+        </div>
+      )}
 
       {result && (
         <div className="mt-4 text-xs text-gray-300">
