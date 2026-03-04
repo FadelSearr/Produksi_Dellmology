@@ -15,6 +15,8 @@ describe('AIScreener helper functions', () => {
   });
 
   it('shows lock message when screener API returns 423', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
     const originalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
     const mockedFetch = jest.fn().mockResolvedValue({
       ok: false,
@@ -35,5 +37,7 @@ describe('AIScreener helper functions', () => {
     } else {
       (globalThis as { fetch?: typeof fetch }).fetch = originalFetch;
     }
+
+    consoleErrorSpy.mockRestore();
   });
 });
