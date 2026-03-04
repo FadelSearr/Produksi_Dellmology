@@ -802,18 +802,81 @@ function LeftSidebar({
   coolingOffActive: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<'day' | 'swing' | 'custom'>('day');
+  const [watchlist, setWatchlist] = useState(FALLBACK_WATCHLIST);
+  const [screenerLoading, setScreenerLoading] = useState(false);
 
-  const watchlist = useMemo(() => {
-    return FALLBACK_WATCHLIST.map((item, index) => {
-      if (index !== 0) return item;
-      return {
-        ...item,
-        symbol: activeSymbol,
-        price: Math.round(currentPrice),
-        change: `${priceChangePct >= 0 ? '+' : ''}${priceChangePct.toFixed(2)}%`,
-      };
-    });
-  }, [activeSymbol, currentPrice, priceChangePct]);
+  useEffect(() => {
+    let cancelled = false;
+
+    const buildFallback = () =>
+      FALLBACK_WATCHLIST.map((item, index) => {
+        if (index !== 0) return item;
+        return {
+          ...item,
+          symbol: activeSymbol,
+          price: Math.round(currentPrice),
+          change: `${priceChangePct >= 0 ? '+' : ''}${priceChangePct.toFixed(2)}%`,
+        };
+      });
+
+    const fetchScreener = async () => {
+      setScreenerLoading(true);
+      try {
+        const endpoint =
+          activeTab === 'day'
+            ? '/api/screener/daytrade?minutes=30&limit=12&min_trades=20'
+            : activeTab === 'swing'
+              ? '/api/screener/swing?days=7&limit=12'
+              : '/api/screener/custom?min_price=100&max_price=500&days=7&minutes=30&limit=12';
+
+        const response = await fetch(endpoint);
+        const payload = response.ok ? ((await response.json()) as { data?: Array<Record<string, unknown>>; success?: boolean }) : null;
+        const rows = Array.isArray(payload?.data) ? payload.data : [];
+
+        if (!rows.length) {
+          if (!cancelled) setWatchlist(buildFallback());
+          return;
+        }
+
+        const mapped = rows.slice(0, 12).map((row) => {
+          const symbol = String(row.symbol || 'N/A').toUpperCase();
+          const price = Number(row.last_price ?? row.current_price ?? row.price ?? 0);
+          const changePct = Number(row.change_pct ?? 0);
+          const scoreRaw = Number(row.score ?? 0);
+          const score = Math.max(0, Math.min(100, Number.isFinite(scoreRaw) ? scoreRaw : 0));
+          const status =
+            typeof row.status === 'string' && row.status.trim().length > 0
+              ? row.status
+              : activeTab === 'day'
+                ? 'Daytrade Signal'
+                : activeTab === 'swing'
+                  ? 'Swing Signal'
+                  : 'Custom Range';
+          return {
+            symbol,
+            price: Number.isFinite(price) ? Math.round(price) : 0,
+            change: `${changePct >= 0 ? '+' : ''}${Number.isFinite(changePct) ? changePct.toFixed(2) : '0.00'}%`,
+            score,
+            status,
+          };
+        });
+
+        if (!cancelled) {
+          setWatchlist(mapped.length > 0 ? mapped : buildFallback());
+        }
+      } catch {
+        if (!cancelled) setWatchlist(buildFallback());
+      } finally {
+        if (!cancelled) setScreenerLoading(false);
+      }
+    };
+
+    void fetchScreener();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, activeSymbol, currentPrice, priceChangePct]);
 
   return (
     <Card className="h-full border-r border-t-0 border-l-0 border-b-0 rounded-none w-64 flex flex-col">
@@ -843,7 +906,8 @@ function LeftSidebar({
         <div className="text-xs text-slate-300 leading-relaxed bg-slate-950/50 p-2 rounded border border-slate-800/50">
           {activeTab === 'day' && 'Detecting high volatility & HAKA dominance > 65%.'}
           {activeTab === 'swing' && 'Scanning consistent accumulation & chart patterns.'}
-          {activeTab === 'custom' && 'Custom filter: Price 100-500, Vol > 10B.'}
+          {activeTab === 'custom' && 'Custom filter active: Price 100-500 + mixed flow score.'}
+          {screenerLoading ? ' Refreshing screener...' : ''}
         </div>
       </div>
 
@@ -1763,6 +1827,7 @@ export default function Home() {
   const [timeframe, setTimeframe] = useState<Timeframe>('15m');
 
   const [marketData, setMarketData] = useState<ChartPoint[]>(FALLBACK_MARKET_DATA);
+  const [brokers, setBrokers] = useState<BrokerRow[]>(FALLBACK_BROKER);
     const [negotiatedFeed, setNegotiatedFeed] = useState<Array<{ symbol: string; trade_type: string; volume: number; notional: number }>>([]);
   const [zData, setZData] = useState<ZScorePoint[]>(FALLBACK_BROKER.map((item) => ({ time: item.broker, score: item.z })));
   const [heatmapData, setHeatmapData] = useState<Array<{ price: number; volume: number; type: 'Bid' | 'Ask' }>>(
@@ -2205,6 +2270,14 @@ export default function Home() {
         profile: item.character_profile || undefined,
       } as BrokerRow;
     });
+
+    setBrokers(brokerRows.length > 0 ? brokerRows : FALLBACK_BROKER);
+    setZData(
+      (brokerRows.length > 0 ? brokerRows : FALLBACK_BROKER).map((item) => ({
+        time: item.broker,
+        score: Number(item.z || 0),
+      })),
+    );
 
     
     const negotiatedRows = (negotiatedRaw?.items || []).slice(0, 10).map((item) => ({

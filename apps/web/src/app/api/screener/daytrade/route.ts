@@ -13,9 +13,11 @@ import { NextRequest, NextResponse } from "next/server";
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const minutes = searchParams.get("minutes") || '30';
-  const limit = searchParams.get("limit") || '10';
-  const minTrades = searchParams.get("min_trades") || '20';
+  const minutes = Math.max(5, Math.min(240, Number(searchParams.get('minutes') || '30')));
+  const limit = Math.max(1, Math.min(50, Number(searchParams.get('limit') || '10')));
+  const minTrades = Math.max(5, Math.min(2000, Number(searchParams.get('min_trades') || '20')));
+  const minPrice = Math.max(0, Number(searchParams.get('min_price') || '0'));
+  const maxPrice = Math.max(minPrice, Number(searchParams.get('max_price') || '999999999'));
 
   try {
     const client = await db.connect();
@@ -39,29 +41,71 @@ export async function GET(request: NextRequest) {
           SELECT
             symbol,
             COUNT(*) as total_trades,
-            SUM(CASE WHEN trade_type = 'HAKA' THEN 1 ELSE 0 END) as haka_trades
+            SUM(CASE WHEN trade_type = 'HAKA' THEN 1 ELSE 0 END) as haka_trades,
+            SUM(COALESCE(volume, 0)) as total_volume
           FROM
             recent_trades
           GROUP BY
             symbol
+        ),
+        latest_trade AS (
+          SELECT DISTINCT ON (symbol)
+            symbol,
+            price::numeric as last_price
+          FROM trades
+          ORDER BY symbol, timestamp DESC
+        ),
+        prev_close AS (
+          SELECT DISTINCT ON (symbol)
+            symbol,
+            close::numeric as prev_close
+          FROM daily_prices
+          ORDER BY symbol, date DESC
         )
         SELECT
-          symbol,
-          haka_trades::float / total_trades::float as haka_ratio,
-          total_trades
+          t.symbol,
+          ROUND((t.haka_trades::float / NULLIF(t.total_trades::float, 0))::numeric, 4) as haka_ratio,
+          t.total_trades,
+          t.total_volume,
+          COALESCE(l.last_price, 0)::float as last_price,
+          COALESCE(
+            ROUND((((COALESCE(l.last_price, 0) - COALESCE(p.prev_close, COALESCE(l.last_price, 0))) / NULLIF(COALESCE(p.prev_close, 0), 0)) * 100)::numeric, 2),
+            0
+          )::float as change_pct,
+          LEAST(100, GREATEST(0, ((t.haka_trades::float / NULLIF(t.total_trades::float, 0)) * 70) + LEAST(t.total_trades / 2.0, 30)))::float as score,
+          CASE
+            WHEN (t.haka_trades::float / NULLIF(t.total_trades::float, 0)) >= 0.7 THEN 'HAKA Dominance'
+            WHEN (t.haka_trades::float / NULLIF(t.total_trades::float, 0)) >= 0.55 THEN 'Momentum Watch'
+            ELSE 'Balanced Flow'
+          END as status
         FROM
-          trade_counts
+          trade_counts t
+          LEFT JOIN latest_trade l ON l.symbol = t.symbol
+          LEFT JOIN prev_close p ON p.symbol = t.symbol
         WHERE
-          total_trades > $2
+          t.total_trades >= $2
+          AND COALESCE(l.last_price, 0) BETWEEN $3 AND $4
         ORDER BY
+          score DESC,
           haka_ratio DESC,
-          total_trades DESC
-        LIMIT $3;
+          t.total_trades DESC
+        LIMIT $5;
       `;
-      const result = await client.query(query, [minutes, minTrades, limit]);
+      const result = await client.query(query, [minutes, minTrades, minPrice, maxPrice, limit]);
       
       return NextResponse.json(
-        { success: true, data: result.rows },
+        {
+          success: true,
+          mode: 'daytrade',
+          filters: {
+            minutes,
+            min_trades: minTrades,
+            min_price: minPrice,
+            max_price: maxPrice,
+            limit,
+          },
+          data: result.rows,
+        },
         { status: 200 }
       );
     } finally {
