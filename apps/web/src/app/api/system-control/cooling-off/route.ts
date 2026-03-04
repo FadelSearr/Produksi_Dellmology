@@ -109,6 +109,7 @@ export async function POST(request: Request) {
         active_until: null,
         remaining_seconds: 0,
         breach_streak: 0,
+        last_breach_at: null,
         reason: `manual reset via ${source}`,
       });
     }
@@ -126,22 +127,24 @@ export async function POST(request: Request) {
         active_until: state.activeUntil,
         remaining_seconds: state.remainingSeconds,
         breach_streak: state.breachStreak,
+        last_breach_at: state.lastBreachAt,
         reason: state.reason || 'Cooling-off active',
       });
     }
 
     const breach = maxDrawdownPct >= thresholdPct;
     const nextStreak = breach ? state.breachStreak + 1 : 0;
+    const nextBreachAt = breach ? new Date().toISOString() : state.lastBreachAt;
 
     await upsertConfigKey(BREACH_STREAK_KEY, String(nextStreak));
 
     if (breach) {
-      await upsertConfigKey(LAST_BREACH_AT_KEY, new Date().toISOString());
+      await upsertConfigKey(LAST_BREACH_AT_KEY, nextBreachAt || new Date().toISOString());
     }
 
     if (breach && nextStreak >= requiredBreaches) {
       const until = new Date(Date.now() + lockHours * 60 * 60 * 1000);
-      const reason = `Cooling-off triggered: drawdown ${maxDrawdownPct.toFixed(2)}% >= ${thresholdPct.toFixed(2)}% (${requiredBreaches}/${requiredBreaches})`;
+      const reason = `Cooling-off triggered via ${source}: drawdown ${maxDrawdownPct.toFixed(2)}% >= ${thresholdPct.toFixed(2)}% (${requiredBreaches}/${requiredBreaches})`;
       await upsertConfigKey(ACTIVE_UNTIL_KEY, until.toISOString());
       await upsertConfigKey(LAST_REASON_KEY, reason);
       await upsertConfigKey(BREACH_STREAK_KEY, '0');
@@ -152,6 +155,7 @@ export async function POST(request: Request) {
         active_until: until.toISOString(),
         remaining_seconds: Math.max(0, Math.floor((until.getTime() - Date.now()) / 1000)),
         breach_streak: 0,
+        last_breach_at: nextBreachAt,
         reason,
       });
     }
@@ -162,8 +166,9 @@ export async function POST(request: Request) {
       active_until: null,
       remaining_seconds: 0,
       breach_streak: nextStreak,
+      last_breach_at: nextBreachAt,
       reason: breach
-        ? `Cooling-off watch: breach ${nextStreak}/${requiredBreaches} (${maxDrawdownPct.toFixed(2)}% >= ${thresholdPct.toFixed(2)}%)`
+        ? `Cooling-off watch via ${source}: breach ${nextStreak}/${requiredBreaches} (${maxDrawdownPct.toFixed(2)}% >= ${thresholdPct.toFixed(2)}%)`
         : `Cooling-off clear: drawdown ${maxDrawdownPct.toFixed(2)}% < ${thresholdPct.toFixed(2)}%`,
     });
   } catch (error) {
