@@ -904,6 +904,7 @@ function TopNavigation({
   mtfValidation,
   systemicRisk,
   portfolioBetaRisk,
+  liquidityGuard,
   volumeProfileDivergence,
   brokerCharacter,
   artificialLiquidity,
@@ -947,6 +948,7 @@ function TopNavigation({
   mtfValidation: MultiTimeframeValidationState;
   systemicRisk: SystemicRisk;
   portfolioBetaRisk: PortfolioBetaRisk;
+  liquidityGuard: LiquidityGuard;
   volumeProfileDivergence: VolumeProfileDivergenceState;
   brokerCharacter: BrokerCharacterState;
   artificialLiquidity: ArtificialLiquidityState;
@@ -1183,6 +1185,22 @@ function TopNavigation({
           title={`Beta ${systemicRisk.betaEstimate.toFixed(2)}/${systemicRisk.threshold.toFixed(2)} | Portfolio ${portfolioBetaRisk.betaEstimate.toFixed(2)}/${portfolioBetaRisk.threshold.toFixed(2)} (${portfolioBetaRisk.contributingSymbols} symbols)`}
         >
           {`BETA ${portfolioBetaRisk.high ? 'PORT HIGH' : systemicRisk.high ? 'HIGH' : 'OK'}`}
+        </div>
+        <div
+          className={cn(
+            'text-[10px] font-mono border rounded px-2 py-1',
+            liquidityGuard.highImpactOrder
+              ? 'text-rose-300 border-rose-500/40 bg-rose-500/10'
+              : liquidityGuard.participationCapBinding
+                ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+                : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
+          )}
+          title={
+            liquidityGuard.warning ||
+            `Impact ${(liquidityGuard.impactPct * 100).toFixed(2)}% | Cap ${(liquidityGuard.capPct * 100).toFixed(2)}% | Max ${liquidityGuard.maxLots.toLocaleString('en-US')} lots`
+          }
+        >
+          {`LIQCAP ${liquidityGuard.highImpactOrder ? 'HIGH IMPACT' : liquidityGuard.participationCapBinding ? 'BIND' : 'OK'}`}
         </div>
         <div
           className={cn(
@@ -5322,6 +5340,7 @@ export default function Home() {
         mtfValidation={mtfValidation}
         systemicRisk={systemicRisk}
         portfolioBetaRisk={portfolioBetaRisk}
+        liquidityGuard={liquidityGuard}
         volumeProfileDivergence={volumeProfileDivergence}
         brokerCharacter={brokerCharacter}
         artificialLiquidity={artificialLiquidity}
