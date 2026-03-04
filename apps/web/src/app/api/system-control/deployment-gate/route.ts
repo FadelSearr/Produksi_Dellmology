@@ -139,10 +139,44 @@ async function fetchLatestInternalPrices(symbols: AnchorSymbol[]): Promise<Recor
   return prices;
 }
 
-function getSyntheticSpread(symbol: AnchorSymbol): number {
-  if (symbol === 'BBCA') return 0.4;
-  if (symbol === 'ASII') return -0.3;
-  return 0.2;
+async function fetchYahooAnchorPrices(symbols: AnchorSymbol[]): Promise<Record<AnchorSymbol, number>> {
+  const prices: Record<AnchorSymbol, number> = {
+    BBCA: 0,
+    ASII: 0,
+    TLKM: 0,
+  };
+
+  const yahooSymbols = symbols.map((symbol) => `${symbol}.JK`).join(',');
+  try {
+    const response = await fetch(
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(yahooSymbols)}`,
+      { cache: 'no-store' },
+    );
+    if (!response.ok) {
+      return prices;
+    }
+
+    const body = (await response.json()) as {
+      quoteResponse?: {
+        result?: Array<{
+          symbol?: string;
+          regularMarketPrice?: number;
+        }>;
+      };
+    };
+
+    for (const row of body?.quoteResponse?.result || []) {
+      const rawSymbol = String(row.symbol || '').toUpperCase();
+      const normalized = rawSymbol.replace('.JK', '') as AnchorSymbol;
+      if (symbols.includes(normalized)) {
+        prices[normalized] = Number(row.regularMarketPrice || 0);
+      }
+    }
+  } catch {
+    return prices;
+  }
+
+  return prices;
 }
 
 function calculateDeviationPct(internalPrice: number, externalPrice: number): number {
@@ -154,13 +188,19 @@ function calculateDeviationPct(internalPrice: number, externalPrice: number): nu
 }
 
 async function computeGoldenRecordValidation() {
-  const rows = await fetchLatestInternalPrices(ANCHOR_SYMBOLS);
+  const [rows, externalPrices] = await Promise.all([
+    fetchLatestInternalPrices(ANCHOR_SYMBOLS),
+    fetchYahooAnchorPrices(ANCHOR_SYMBOLS),
+  ]);
 
   const failedSymbols: AnchorSymbol[] = [];
   for (const symbol of ANCHOR_SYMBOLS) {
     const internal = Number(rows[symbol] || 0);
-    const syntheticSpread = getSyntheticSpread(symbol);
-    const external = internal > 0 ? Number((internal * (1 + syntheticSpread / 100)).toFixed(2)) : 0;
+    const external = Number(externalPrices[symbol] || 0);
+    if (external <= 0) {
+      failedSymbols.push(symbol);
+      continue;
+    }
     const deviation = calculateDeviationPct(internal, external);
     if (deviation > MAX_ALLOWED_DEVIATION_PCT) {
       failedSymbols.push(symbol);
