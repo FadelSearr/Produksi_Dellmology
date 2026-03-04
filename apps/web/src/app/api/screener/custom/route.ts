@@ -1,7 +1,23 @@
 import { db } from '@/lib/db';
+import { readCoolingOffLockState } from '@/lib/security/coolingOff';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest) {
+  const coolingOff = await readCoolingOffLockState();
+  if (coolingOff.active) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Cooling-off active: screener temporarily locked',
+        lock: {
+          active_until: coolingOff.activeUntil,
+          remaining_seconds: coolingOff.remainingSeconds,
+        },
+      },
+      { status: 423 },
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const minPrice = Math.max(0, Number(searchParams.get('min_price') || '100'));
   const maxPrice = Math.max(minPrice, Number(searchParams.get('max_price') || '500'));

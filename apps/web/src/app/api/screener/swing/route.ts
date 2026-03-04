@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { readCoolingOffLockState } from "@/lib/security/coolingOff";
 import { NextRequest, NextResponse } from "next/server";
 
 /**
@@ -10,6 +11,21 @@ import { NextRequest, NextResponse } from "next/server";
  * - limit: (optional) The number of stocks to return. Defaults to 10.
  */
 export async function GET(request: NextRequest) {
+  const coolingOff = await readCoolingOffLockState();
+  if (coolingOff.active) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Cooling-off active: screener temporarily locked',
+        lock: {
+          active_until: coolingOff.activeUntil,
+          remaining_seconds: coolingOff.remainingSeconds,
+        },
+      },
+      { status: 423 },
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const days = Math.max(3, Math.min(60, Number(searchParams.get('days') || '7')));
   const limit = Math.max(1, Math.min(50, Number(searchParams.get('limit') || '10')));
