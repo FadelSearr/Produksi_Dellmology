@@ -888,6 +888,7 @@ function TopNavigation({
   immutableAuditAlert,
   deploymentGate,
   systemKillSwitch,
+  rocKillSwitch,
   infraStatus,
   globalData,
 }: {
@@ -902,6 +903,7 @@ function TopNavigation({
   immutableAuditAlert: ImmutableAuditAlertState;
   deploymentGate: DeploymentGateState;
   systemKillSwitch: SystemKillSwitchState;
+  rocKillSwitch: RocKillSwitchState;
   infraStatus: { sse: Tone; db: Tone; integrity: Tone; token: Tone };
   globalData: GlobalCorrelationResponse | null;
 }) {
@@ -998,6 +1000,15 @@ function TopNavigation({
           title={systemKillSwitch.reason || 'Cloud-triggered kill-switch normal'}
         >
           {`SYS ${systemKillSwitch.active ? 'KILL ON' : 'KILL OFF'}`}
+        </div>
+        <div
+          className={cn(
+            'text-[10px] font-mono border rounded px-2 py-1',
+            rocKillSwitch.active ? 'text-rose-300 border-rose-500/40 bg-rose-500/10' : 'text-slate-500 border-slate-800 bg-slate-900/30',
+          )}
+          title={rocKillSwitch.reason || 'RoC volatility normal'}
+        >
+          {`ROC ${rocKillSwitch.active ? `${Math.abs(rocKillSwitch.dropPct).toFixed(2)}%` : 'OK'}`}
         </div>
         <div
           className={cn(
@@ -4995,6 +5006,7 @@ export default function Home() {
         immutableAuditAlert={immutableAuditAlert}
         deploymentGate={deploymentGate}
         systemKillSwitch={systemKillSwitch}
+        rocKillSwitch={rocKillSwitch}
         infraStatus={infraStatus}
         globalData={globalData}
       />
