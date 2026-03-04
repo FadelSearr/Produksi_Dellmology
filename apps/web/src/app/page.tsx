@@ -1410,6 +1410,17 @@ function TopNavigation({
       : 'text-amber-300 border-amber-500/40 bg-amber-500/10'
     : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10';
   const feedDelayLabel = maxFallbackDelayMinutes !== null ? `${Math.round(maxFallbackDelayMinutes)}m` : 'n/a';
+  const feedFreshnessLabel = marketIntelAdapter.checkedAt
+    ? new Date(marketIntelAdapter.checkedAt).toLocaleTimeString('id-ID')
+    : null;
+  const feedFreshnessTone =
+    feedFreshnessLabel === null
+      ? 'text-slate-500 border-slate-800 bg-slate-900/30'
+      : fallbackEmergencyActive
+        ? 'text-rose-300 border-rose-500/40 bg-rose-500/10'
+        : feedDelayed
+          ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+          : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10';
   const infraCoreStatuses: Tone[] = [infraStatus.sse, infraStatus.db, infraStatus.integrity];
   const infraCoreHealthyCount = infraCoreStatuses.filter((status) => status === 'good').length;
   const infraCoreIssueCount = infraCoreStatuses.length - infraCoreHealthyCount;
@@ -1537,6 +1548,16 @@ function TopNavigation({
           }
         >
           {`FEED ${feedDelayed ? `DELAYED ${feedDelayLabel}` : 'LIVE'}`}
+        </div>
+        <div
+          className={cn('text-[10px] font-mono border rounded px-2 py-1', feedFreshnessTone)}
+          title={
+            feedFreshnessLabel === null
+              ? 'No feed freshness timestamp available'
+              : `Last adapter check at ${feedFreshnessLabel} | checkedAt ${marketIntelAdapter.checkedAt}`
+          }
+        >
+          {`FRESH ${feedFreshnessLabel || 'N/A'}`}
         </div>
         <div className={cn('text-[10px] font-mono border rounded px-2 py-1', globalSentimentTone)} title="Global sentiment context from correlation feed">
           {`SENT ${globalSentimentLabel}`}
