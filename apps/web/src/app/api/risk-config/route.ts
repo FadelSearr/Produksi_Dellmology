@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createHash } from 'crypto';
 import { db } from '@/lib/db';
+import { verifyRuntimeConfigAuditChain } from '@/lib/security/immutableAudit';
 
 export const dynamic = 'force-dynamic';
 
@@ -316,62 +317,3 @@ function stableStringify(value: unknown): string {
   return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(objectValue[key])}`).join(',')}}`;
 }
 
-async function verifyRuntimeConfigAuditChain(): Promise<{
-  valid: boolean;
-  checkedRows: number;
-  hashMismatches: number;
-  linkageMismatches: number;
-}> {
-  const result = await db.query(
-    `
-      SELECT id, config_key, old_value, new_value, actor, source, payload_hash, previous_hash, record_hash
-      FROM runtime_config_audit
-      ORDER BY id ASC
-    `,
-  );
-
-  let previousRecordHash: string | null = null;
-  let hashMismatches = 0;
-  let linkageMismatches = 0;
-
-  for (const row of result.rows as Array<{
-    id: number;
-    config_key: string;
-    old_value: string | null;
-    new_value: string;
-    actor: string | null;
-    source: string | null;
-    payload_hash: string | null;
-    previous_hash: string | null;
-    record_hash: string;
-  }>) {
-    const expectedRecordHash = sha256(
-      [
-        row.previous_hash || 'GENESIS',
-        row.config_key,
-        row.old_value ?? 'NULL',
-        row.new_value,
-        row.actor || '',
-        row.source || '',
-        row.payload_hash || '',
-      ].join('|'),
-    );
-
-    if (expectedRecordHash !== row.record_hash) {
-      hashMismatches += 1;
-    }
-
-    if (row.previous_hash !== (previousRecordHash || null)) {
-      linkageMismatches += 1;
-    }
-
-    previousRecordHash = row.record_hash;
-  }
-
-  return {
-    valid: hashMismatches === 0 && linkageMismatches === 0,
-    checkedRows: result.rows.length,
-    hashMismatches,
-    linkageMismatches,
-  };
-}
