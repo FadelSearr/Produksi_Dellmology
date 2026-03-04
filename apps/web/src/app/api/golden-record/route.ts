@@ -11,6 +11,7 @@ interface AnchorValidation {
   external_price: number;
   deviation_pct: number;
   is_valid: boolean;
+  external_source: 'YAHOO_QUOTE' | 'UNAVAILABLE';
 }
 
 const ANCHOR_SYMBOLS: AnchorSymbol[] = ['BBCA', 'ASII', 'TLKM'];
@@ -19,18 +20,21 @@ const MAX_ALLOWED_DEVIATION_PCT = 2;
 export async function GET() {
   try {
     const rows = await fetchLatestInternalPrices(ANCHOR_SYMBOLS);
+    const externalPrices = await fetchYahooAnchorPrices(ANCHOR_SYMBOLS);
 
     const validations: AnchorValidation[] = ANCHOR_SYMBOLS.map((symbol) => {
       const internal = Number(rows[symbol] || 0);
-      const external = buildReferencePrice(symbol, internal);
+      const external = Number(externalPrices[symbol] || 0);
       const deviation = calculateDeviationPct(internal, external);
+      const externalAvailable = external > 0;
 
       return {
         symbol,
         internal_price: internal,
         external_price: external,
         deviation_pct: deviation,
-        is_valid: deviation <= MAX_ALLOWED_DEVIATION_PCT,
+        is_valid: externalAvailable && deviation <= MAX_ALLOWED_DEVIATION_PCT,
+        external_source: externalAvailable ? 'YAHOO_QUOTE' : 'UNAVAILABLE',
       };
     });
 
@@ -83,19 +87,44 @@ async function fetchLatestInternalPrices(symbols: AnchorSymbol[]): Promise<Recor
   return prices;
 }
 
-function buildReferencePrice(symbol: AnchorSymbol, internalPrice: number): number {
-  if (!internalPrice || internalPrice <= 0) {
-    return 0;
+async function fetchYahooAnchorPrices(symbols: AnchorSymbol[]): Promise<Record<AnchorSymbol, number>> {
+  const prices: Record<AnchorSymbol, number> = {
+    BBCA: 0,
+    ASII: 0,
+    TLKM: 0,
+  };
+
+  const yahooSymbols = symbols.map((symbol) => `${symbol}.JK`).join(',');
+  try {
+    const response = await fetch(
+      `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(yahooSymbols)}`,
+      { cache: 'no-store' },
+    );
+    if (!response.ok) {
+      return prices;
+    }
+
+    const body = (await response.json()) as {
+      quoteResponse?: {
+        result?: Array<{
+          symbol?: string;
+          regularMarketPrice?: number;
+        }>;
+      };
+    };
+
+    for (const row of body?.quoteResponse?.result || []) {
+      const rawSymbol = String(row.symbol || '').toUpperCase();
+      const normalized = rawSymbol.replace('.JK', '') as AnchorSymbol;
+      if (symbols.includes(normalized)) {
+        prices[normalized] = Number(row.regularMarketPrice || 0);
+      }
+    }
+  } catch {
+    return prices;
   }
 
-  const syntheticSpread = getSyntheticSpread(symbol);
-  return Number((internalPrice * (1 + syntheticSpread / 100)).toFixed(2));
-}
-
-function getSyntheticSpread(symbol: AnchorSymbol): number {
-  if (symbol === 'BBCA') return 0.4;
-  if (symbol === 'ASII') return -0.3;
-  return 0.2;
+  return prices;
 }
 
 function calculateDeviationPct(internalPrice: number, externalPrice: number): number {
