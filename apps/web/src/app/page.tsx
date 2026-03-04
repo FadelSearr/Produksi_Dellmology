@@ -284,6 +284,7 @@ interface CoolingOffState {
   activeUntil: string | null;
   remainingSeconds: number;
   breachStreak: number;
+  lastBreachAt: string | null;
   reason: string | null;
 }
 
@@ -1753,6 +1754,7 @@ function BottomPanel({
   const label = confidence?.confidence_label || 'MEDIUM';
   const accuracy = Number(confidence?.accuracy_pct || 0);
   const coolingTriggerLabel = coolingTriggerFromReason(coolingOff.reason, coolingOff.active);
+  const coolingLastTriggerLabel = coolingOff.lastBreachAt ? new Date(coolingOff.lastBreachAt).toLocaleString('id-ID') : '-';
 
   return (
     <Card className="h-48 border-t border-slate-800 rounded-none shrink-0 flex flex-row">
@@ -2050,6 +2052,7 @@ function BottomPanel({
           <div className="text-[9px] text-slate-500 font-mono">
             {`Votes T/B/S: ${modelConsensus.technical} / ${modelConsensus.bandarmology} / ${modelConsensus.sentiment}`}
           </div>
+          <div className="text-[9px] text-slate-500 font-mono">{`Last Trigger: ${coolingLastTriggerLabel} | ${coolingTriggerLabel}`}</div>
           {coolingOff.reason ? <div className="text-[9px] text-slate-500 font-mono">{coolingOff.reason}</div> : null}
           <div className="mt-2 pt-2 border-t border-slate-800 text-center">
             <span className="text-[9px] text-slate-600 block mb-1">SYSTEM LATENCY</span>
@@ -2154,6 +2157,7 @@ export default function Home() {
     activeUntil: null,
     remainingSeconds: 0,
     breachStreak: 0,
+    lastBreachAt: null,
     reason: null,
   });
   const [combatMode, setCombatMode] = useState<CombatModeState>({
@@ -2410,6 +2414,7 @@ export default function Home() {
       active_until?: string | null;
       remaining_seconds?: number;
       breach_streak?: number;
+      last_breach_at?: string | null;
       reason?: string | null;
     } | null;
     const deployGate = requests[12] as {
@@ -2731,6 +2736,7 @@ export default function Home() {
         activeUntil: coolingState.active_until || null,
         remainingSeconds: Math.max(0, Number(coolingState.remaining_seconds || 0)),
         breachStreak: Math.max(0, Number(coolingState.breach_streak || 0)),
+        lastBreachAt: coolingState.last_breach_at || null,
         reason: coolingState.reason || null,
       });
     }
@@ -3373,6 +3379,7 @@ export default function Home() {
           active_until?: string | null;
           remaining_seconds?: number;
           breach_streak?: number;
+          last_breach_at?: string | null;
           reason?: string;
         };
 
@@ -3388,6 +3395,7 @@ export default function Home() {
           activeUntil: body.active_until || null,
           remainingSeconds: Math.max(0, Number(body.remaining_seconds || 0)),
           breachStreak: Math.max(0, Number(body.breach_streak || 0)),
+          lastBreachAt: body.last_breach_at || null,
           reason: body.reason || null,
         });
 
@@ -3735,6 +3743,7 @@ export default function Home() {
         reason: coolingOff.reason,
         breach_streak: coolingOff.breachStreak,
         remaining_seconds: coolingOff.remainingSeconds,
+        last_breach_at: coolingOff.lastBreachAt,
       },
       source_health: {
         market_intel: {
@@ -3980,6 +3989,7 @@ export default function Home() {
     coolingOff.reason,
     coolingOff.breachStreak,
     coolingOff.remainingSeconds,
+    coolingOff.lastBreachAt,
     modelConsensus.bandarmology,
     modelConsensus.message,
     modelConsensus.pass,
@@ -4147,6 +4157,7 @@ export default function Home() {
         active_until?: string | null;
         remaining_seconds?: number;
         breach_streak?: number;
+        last_breach_at?: string | null;
         reason?: string;
       };
 
@@ -4155,6 +4166,7 @@ export default function Home() {
         activeUntil: coolingBody.active_until || null,
         remainingSeconds: Math.max(0, Number(coolingBody.remaining_seconds || 0)),
         breachStreak: Math.max(0, Number(coolingBody.breach_streak || 0)),
+        lastBreachAt: coolingBody.last_breach_at || null,
         reason: coolingBody.reason || null,
       });
 
@@ -4249,6 +4261,7 @@ export default function Home() {
         active_until?: string | null;
         remaining_seconds?: number;
         breach_streak?: number;
+        last_breach_at?: string | null;
         reason?: string;
       };
 
@@ -4261,6 +4274,7 @@ export default function Home() {
         activeUntil: body.active_until || null,
         remainingSeconds: Math.max(0, Number(body.remaining_seconds || 0)),
         breachStreak: Math.max(0, Number(body.breach_streak || 0)),
+        lastBreachAt: body.last_breach_at || null,
         reason: body.reason || 'manual reset',
       });
 
