@@ -107,7 +107,7 @@ export async function GET(request: Request) {
     const chainKey = key || '__GLOBAL__';
     const stateResult = await db.query(
       `
-        SELECT is_valid
+        SELECT is_valid, last_lock_alert_at, last_unlock_alert_at
         FROM runtime_config_chain_state
         WHERE chain_key = $1
         LIMIT 1
@@ -189,6 +189,20 @@ export async function GET(request: Request) {
       [chainKey],
     );
 
+    const stateRow = stateResult.rows[0] as
+      | {
+          is_valid?: boolean;
+          last_lock_alert_at?: string | null;
+          last_unlock_alert_at?: string | null;
+        }
+      | undefined;
+
+    const nowMs = Date.now();
+    const lockLastMs = stateRow?.last_lock_alert_at ? new Date(String(stateRow.last_lock_alert_at)).getTime() : 0;
+    const unlockLastMs = stateRow?.last_unlock_alert_at ? new Date(String(stateRow.last_unlock_alert_at)).getTime() : 0;
+    const lockRemainingMs = lockLastMs > 0 ? Math.max(0, AUDIT_ALERT_COOLDOWN_MS - (nowMs - lockLastMs)) : 0;
+    const unlockRemainingMs = unlockLastMs > 0 ? Math.max(0, AUDIT_ALERT_COOLDOWN_MS - (nowMs - unlockLastMs)) : 0;
+
     let transitionAlert: TransitionAlertResult | null = null;
     if (transition.changed && transition.event_type) {
       transitionAlert = await emitTransitionAlert({
@@ -210,6 +224,17 @@ export async function GET(request: Request) {
       failures: failures.slice(0, 20),
       transition,
       transition_alert: transitionAlert,
+      alert_gate: {
+        cooldown_ms: AUDIT_ALERT_COOLDOWN_MS,
+        lock: {
+          last_alert_at: stateRow?.last_lock_alert_at || null,
+          remaining_ms: lockRemainingMs,
+        },
+        unlock: {
+          last_alert_at: stateRow?.last_unlock_alert_at || null,
+          remaining_ms: unlockRemainingMs,
+        },
+      },
       recent_events: recentEventsResult.rows as LockEventRow[],
       verified_at: new Date().toISOString(),
     });

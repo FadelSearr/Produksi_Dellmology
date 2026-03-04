@@ -291,6 +291,20 @@ interface RiskConfigLockMeta {
   verifiedAt: string | null;
 }
 
+interface ImmutableAuditAlertState {
+  cooldownMs: number;
+  lockLastAlertAt: string | null;
+  lockRemainingMs: number;
+  unlockLastAlertAt: string | null;
+  unlockRemainingMs: number;
+  lastTransition: {
+    eventType: 'LOCK' | 'UNLOCK';
+    dispatched: boolean;
+    dispatchError: string | null;
+    checkedAt: string | null;
+  } | null;
+}
+
 interface CoolingOffState {
   active: boolean;
   activeUntil: string | null;
@@ -1840,6 +1854,7 @@ function BottomPanel({
   lastRiskAudit,
   staleAudit,
   coolingOff,
+  immutableAuditAlert,
   dataSanity,
   modelConsensus,
   deploymentGate,
@@ -1889,6 +1904,7 @@ function BottomPanel({
   lastRiskAudit: RiskAuditInfo;
   staleAudit: boolean;
   coolingOff: CoolingOffState;
+  immutableAuditAlert: ImmutableAuditAlertState;
   dataSanity: DataSanityState;
   modelConsensus: ModelConsensus;
   deploymentGate: DeploymentGateState;
@@ -2181,6 +2197,16 @@ function BottomPanel({
           <div
             className={cn(
               'text-[9px] font-mono border rounded px-2 py-1',
+              immutableAuditAlert.lockRemainingMs > 0 || immutableAuditAlert.unlockRemainingMs > 0
+                ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+                : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
+            )}
+          >
+            {`IMMUTABLE ALERT: LOCK ${immutableAuditAlert.lockRemainingMs > 0 ? `CD ${Math.ceil(immutableAuditAlert.lockRemainingMs / 1000)}s` : 'READY'} | UNLOCK ${immutableAuditAlert.unlockRemainingMs > 0 ? `CD ${Math.ceil(immutableAuditAlert.unlockRemainingMs / 1000)}s` : 'READY'}`}
+          </div>
+          <div
+            className={cn(
+              'text-[9px] font-mono border rounded px-2 py-1',
               systemKillSwitch.active ? 'text-rose-300 border-rose-500/40 bg-rose-500/10' : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
             )}
           >
@@ -2199,6 +2225,11 @@ function BottomPanel({
           {systemKillSwitch.reason ? <div className="text-[9px] text-slate-500 font-mono">{systemKillSwitch.reason}</div> : null}
           {engineHeartbeat.reason ? <div className="text-[9px] text-slate-500 font-mono">{engineHeartbeat.reason}</div> : null}
           {deploymentGate.reason ? <div className="text-[9px] text-slate-500 font-mono">{deploymentGate.reason}</div> : null}
+          {immutableAuditAlert.lastTransition ? (
+            <div className={cn('text-[9px] font-mono', immutableAuditAlert.lastTransition.dispatched ? 'text-slate-500' : 'text-amber-300')}>
+              {`Immutable Alert Last: ${immutableAuditAlert.lastTransition.eventType} | ${immutableAuditAlert.lastTransition.dispatched ? 'SENT' : 'FAILED'}${immutableAuditAlert.lastTransition.dispatchError ? ` | ${immutableAuditAlert.lastTransition.dispatchError}` : ''}`}
+            </div>
+          ) : null}
           <div
             className={cn(
               'text-[9px] font-mono border rounded px-2 py-1',
@@ -2337,6 +2368,14 @@ export default function Home() {
     breachStreak: 0,
     lastBreachAt: null,
     reason: null,
+  });
+  const [immutableAuditAlert, setImmutableAuditAlert] = useState<ImmutableAuditAlertState>({
+    cooldownMs: 10 * 60 * 1000,
+    lockLastAlertAt: null,
+    lockRemainingMs: 0,
+    unlockLastAlertAt: null,
+    unlockRemainingMs: 0,
+    lastTransition: null,
   });
   const [combatMode, setCombatMode] = useState<CombatModeState>({
     active: false,
@@ -2603,6 +2642,23 @@ export default function Home() {
       hash_mismatches?: number;
       linkage_mismatches?: number;
       verified_at?: string;
+      alert_gate?: {
+        cooldown_ms?: number;
+        lock?: {
+          last_alert_at?: string | null;
+          remaining_ms?: number;
+        };
+        unlock?: {
+          last_alert_at?: string | null;
+          remaining_ms?: number;
+        };
+      };
+      transition_alert?: {
+        event_type?: 'LOCK' | 'UNLOCK';
+        dispatched?: boolean;
+        dispatch_error?: string | null;
+        checked_at?: string;
+      } | null;
     } | null;
     const coolingState = requests[11] as {
       active?: boolean;
@@ -2950,6 +3006,26 @@ export default function Home() {
         hashMismatches: Number(riskVerify.hash_mismatches || 0),
         linkageMismatches: Number(riskVerify.linkage_mismatches || 0),
         verifiedAt: riskVerify.verified_at || null,
+      });
+      setImmutableAuditAlert((prev) => {
+        const transition = riskVerify.transition_alert;
+        const nextTransition = transition?.event_type
+          ? {
+              eventType: transition.event_type,
+              dispatched: transition.dispatched === true,
+              dispatchError: transition.dispatch_error || null,
+              checkedAt: transition.checked_at || null,
+            }
+          : prev.lastTransition;
+
+        return {
+          cooldownMs: Number(riskVerify.alert_gate?.cooldown_ms || prev.cooldownMs || 10 * 60 * 1000),
+          lockLastAlertAt: riskVerify.alert_gate?.lock?.last_alert_at || prev.lockLastAlertAt,
+          lockRemainingMs: Math.max(0, Number(riskVerify.alert_gate?.lock?.remaining_ms || 0)),
+          unlockLastAlertAt: riskVerify.alert_gate?.unlock?.last_alert_at || prev.unlockLastAlertAt,
+          unlockRemainingMs: Math.max(0, Number(riskVerify.alert_gate?.unlock?.remaining_ms || 0)),
+          lastTransition: nextTransition,
+        };
       });
     }
 
@@ -4845,6 +4921,7 @@ export default function Home() {
           lastRiskAudit={lastRiskAudit}
           staleAudit={staleAudit}
           coolingOff={coolingOff}
+          immutableAuditAlert={immutableAuditAlert}
           dataSanity={dataSanity}
           modelConsensus={modelConsensus}
           deploymentGate={deploymentGate}
