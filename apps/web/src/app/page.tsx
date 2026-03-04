@@ -889,6 +889,7 @@ function TopNavigation({
   deploymentGate,
   systemKillSwitch,
   rocKillSwitch,
+  dataSanity,
   infraStatus,
   globalData,
 }: {
@@ -904,6 +905,7 @@ function TopNavigation({
   deploymentGate: DeploymentGateState;
   systemKillSwitch: SystemKillSwitchState;
   rocKillSwitch: RocKillSwitchState;
+  dataSanity: DataSanityState;
   infraStatus: { sse: Tone; db: Tone; integrity: Tone; token: Tone };
   globalData: GlobalCorrelationResponse | null;
 }) {
@@ -1009,6 +1011,17 @@ function TopNavigation({
           title={rocKillSwitch.reason || 'RoC volatility normal'}
         >
           {`ROC ${rocKillSwitch.active ? `${Math.abs(rocKillSwitch.dropPct).toFixed(2)}%` : 'OK'}`}
+        </div>
+        <div
+          className={cn(
+            'text-[10px] font-mono border rounded px-2 py-1',
+            dataSanity.warning || dataSanity.lockActive
+              ? 'text-rose-300 border-rose-500/40 bg-rose-500/10'
+              : 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
+          )}
+          title={dataSanity.reason || 'Data sanity validator pass'}
+        >
+          {`SANITY ${dataSanity.lockActive ? 'LOCK' : dataSanity.warning ? 'WARN' : 'OK'}`}
         </div>
         <div
           className={cn(
@@ -5007,6 +5020,7 @@ export default function Home() {
         deploymentGate={deploymentGate}
         systemKillSwitch={systemKillSwitch}
         rocKillSwitch={rocKillSwitch}
+        dataSanity={dataSanity}
         infraStatus={infraStatus}
         globalData={globalData}
       />
