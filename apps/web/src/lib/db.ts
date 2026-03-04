@@ -1,7 +1,9 @@
 import { Pool } from 'pg';
 
-// TODO: Move connection details to environment variables (.env.local)
-const DATABASE_URL = 'postgresql://admin:password@localhost:5433/dellmology';
+const DATABASE_URL =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  'postgresql://localhost:5433/dellmology';
 
 let pool: Pool;
 
@@ -10,9 +12,7 @@ let pool: Pool;
 if (process.env.NODE_ENV === 'production') {
   pool = new Pool({
     connectionString: DATABASE_URL,
-    ssl: {
-      rejectUnauthorized: false, // Required for some cloud providers, adjust as needed.
-    },
+    ssl: process.env.DB_SSL_DISABLE === 'true' ? false : { rejectUnauthorized: false },
   });
 } else {
   // Ensure the pool is created only once in development.

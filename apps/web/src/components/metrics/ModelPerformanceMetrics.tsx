@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { TrendingDown, History, Zap } from 'lucide-react'
+import { History, Zap } from 'lucide-react'
 
 interface ModelMetrics {
   last_training_date: string
@@ -16,20 +16,85 @@ interface ModelMetrics {
 export default function ModelPerformanceMetrics() {
   const [metrics, setMetrics] = useState<ModelMetrics | null>(null)
   const [loading, setLoading] = useState(true)
+  const [trend7d, setTrend7d] = useState<number[]>([])
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Mock metrics for now (in production, fetch from API)
-    const mockMetrics: ModelMetrics = {
-      last_training_date: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
-      training_loss: 0.0342,
-      validation_accuracy: 0.8756,
-      average_training_time_seconds: 2847,
-      model_size_mb: 45.2,
-      predictions_today: 847,
-      accuracy_last_7d: 0.8621,
+    let mounted = true
+
+    const toNumber = (value: unknown, fallback = 0) => {
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : fallback
     }
-    setMetrics(mockMetrics)
-    setLoading(false)
+
+    const fetchMetrics = async () => {
+      try {
+        if (mounted) {
+          setLoading(true)
+          setError(null)
+        }
+
+        const response = await fetch('/api/metrics?limit=30', { cache: 'no-store' })
+        if (!response.ok) {
+          throw new Error(`Failed to fetch metrics (${response.status})`)
+        }
+
+        const payload = await response.json()
+        if (!mounted) return
+
+        const rows = Array.isArray(payload?.metrics)
+          ? payload.metrics
+          : Array.isArray(payload?.metrics?.rows)
+            ? payload.metrics.rows
+            : []
+
+        if (rows.length === 0) {
+          setMetrics(null)
+          setTrend7d([])
+          return
+        }
+
+        const ordered = [...rows].sort(
+          (a, b) => new Date(b.trained_at || b.last_training_date || 0).getTime() - new Date(a.trained_at || a.last_training_date || 0).getTime(),
+        )
+        const latest = ordered[0]
+
+        const accuracies = ordered
+          .map((item) => toNumber(item.validation_accuracy, NaN))
+          .filter((value) => Number.isFinite(value))
+
+        const computedTrend = accuracies.slice(0, 7).reverse()
+        const avgAccuracy = accuracies.length > 0
+          ? accuracies.reduce((sum, value) => sum + value, 0) / accuracies.length
+          : 0
+
+        setTrend7d(computedTrend)
+        setMetrics({
+          last_training_date: latest.trained_at || latest.last_training_date || new Date().toISOString(),
+          training_loss: toNumber(latest.training_loss),
+          validation_accuracy: toNumber(latest.validation_accuracy),
+          average_training_time_seconds: toNumber(latest.training_time_seconds || latest.average_training_time_seconds),
+          model_size_mb: toNumber(latest.model_size_mb),
+          predictions_today: toNumber(payload?.predictions_today || latest.predictions_today),
+          accuracy_last_7d: avgAccuracy,
+        })
+      } catch (fetchError) {
+        if (!mounted) return
+        setError(fetchError instanceof Error ? fetchError.message : 'Failed to fetch metrics')
+        setMetrics(null)
+      } finally {
+        if (mounted) {
+          setLoading(false)
+        }
+      }
+    }
+
+    fetchMetrics()
+    const intervalId = setInterval(fetchMetrics, 60_000)
+    return () => {
+      mounted = false
+      clearInterval(intervalId)
+    }
   }, [])
 
   if (loading) {
@@ -40,6 +105,14 @@ export default function ModelPerformanceMetrics() {
           <div className="h-4 bg-gray-700 rounded w-full"></div>
           <div className="h-4 bg-gray-700 rounded w-2/3"></div>
         </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-4 text-sm text-red-300">
+        {error}
       </div>
     )
   }
@@ -111,7 +184,7 @@ export default function ModelPerformanceMetrics() {
         </div>
         {/* Simple sparkline visualization */}
         <div className="flex items-end gap-0.5 h-12">
-          {[0.82, 0.84, 0.86, 0.85, 0.88, 0.87, 0.8756].map((val, i) => (
+          {(trend7d.length > 0 ? trend7d : [metrics.accuracy_last_7d]).map((val, i) => (
             <div
               key={i}
               className="flex-1 bg-linear-to-t from-green-500/50 to-green-400 rounded-t opacity-70 hover:opacity-100 transition-opacity"

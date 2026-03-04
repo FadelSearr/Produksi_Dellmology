@@ -11,17 +11,12 @@ interface CandleData {
   close: number;
 }
 
-interface IndicatorLine {
-  time: number;
-  value: number;
-  color?: string;
-}
-
 export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<CandleData[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -62,17 +57,16 @@ export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
     });
     volumeSeries.priceScale().scaleMargins(0, 0.8);
 
-    // Fetch or generate mock data
-    const generateMockData = (): CandleData[] => {
+    const generateFallbackData = (basePrice = 1000): CandleData[] => {
       const data: CandleData[] = [];
-      let basePrice = 1000;
+      let movingBase = basePrice;
       const now = Math.floor(Date.now() / 1000);
 
       for (let i = 50; i >= 0; i--) {
         const time = now - i * 3600; // Hourly data
         const change = (Math.random() - 0.5) * 20;
-        const open = basePrice;
-        const close = basePrice + change;
+        const open = movingBase;
+        const close = movingBase + change;
         const high = Math.max(open, close) + Math.random() * 10;
         const low = Math.min(open, close) - Math.random() * 10;
 
@@ -84,25 +78,45 @@ export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
           close: Math.round(close),
         });
 
-        basePrice = close;
+        movingBase = close;
       }
 
       return data;
     };
 
-    const chartData = generateMockData();
-    setData(chartData);
+    const applyChartData = (chartData: CandleData[]) => {
+      setData(chartData);
+      candlestickSeries.setData(chartData);
 
-    // Plot candlesticks
-    candlestickSeries.setData(chartData);
+      const volumeData = chartData.map((point, index) => ({
+        time: point.time,
+        value: Math.max(10, Math.abs(point.close - point.open) * 120 + index),
+        color: point.close >= point.open ? '#10b981' : '#ef4444',
+      }));
+      volumeSeries.setData(volumeData);
 
-    // Plot volume (mock)
-    const volumeData = chartData.map((d) => ({
-      time: d.time,
-      value: Math.random() * 100,
-      color: d.close >= d.open ? '#10b981' : '#ef4444',
-    }));
-    volumeSeries.setData(volumeData);
+      const smaData = [];
+      for (let i = 19; i < chartData.length; i++) {
+        const sum = chartData.slice(i - 19, i + 1).reduce((acc, d) => acc + d.close, 0);
+        smaData.push({
+          time: chartData[i].time,
+          value: sum / 20,
+        });
+      }
+      smaLine20.setData(smaData);
+
+      const smaData50 = [];
+      for (let i = 49; i < chartData.length; i++) {
+        const sum = chartData.slice(i - 49, i + 1).reduce((acc, d) => acc + d.close, 0);
+        smaData50.push({
+          time: chartData[i].time,
+          value: sum / 50,
+        });
+      }
+      smaLine50.setData(smaData50);
+
+      chart.timeScale().fitContent();
+    };
 
     // Add 20-day SMA (Simple Moving Average)
     const smaLine20 = (chart as any).addLineSeries({
@@ -111,16 +125,6 @@ export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
       title: 'SMA 20',
     });
 
-    const smaData = [];
-    for (let i = 19; i < chartData.length; i++) {
-      const sum = chartData.slice(i - 19, i + 1).reduce((acc, d) => acc + d.close, 0);
-      smaData.push({
-        time: chartData[i].time,
-        value: sum / 20,
-      });
-    }
-    smaLine20.setData(smaData);
-
     // Add 50-day SMA
     const smaLine50 = (chart as any).addLineSeries({
       color: '#8b5cf6',
@@ -128,18 +132,41 @@ export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
       title: 'SMA 50',
     });
 
-    const smaData50 = [];
-    for (let i = 49; i < chartData.length; i++) {
-      const sum = chartData.slice(i - 49, i + 1).reduce((acc, d) => acc + d.close, 0);
-      smaData50.push({
-        time: chartData[i].time,
-        value: sum / 50,
-      });
-    }
-    smaLine50.setData(smaData50);
+    const loadChartData = async () => {
+      try {
+        setLoading(true);
+        setError(null);
 
-    // Fit content
-    chart.timeScale().fitContent();
+        const [marketRes, regimeRes] = await Promise.all([
+          fetch(`/api/market-intelligence?symbol=${encodeURIComponent(symbol)}&timeframe=1h`, { cache: 'no-store' }),
+          fetch(`/api/market-regime?symbol=${encodeURIComponent(symbol)}&lookbackMinutes=300`, { cache: 'no-store' }),
+        ]);
+
+        const marketJson = marketRes.ok ? await marketRes.json() : null;
+        const regimeJson = regimeRes.ok ? await regimeRes.json() : null;
+
+        const lastPrice = Number(marketJson?.metrics?.last_price || marketJson?.metrics?.vwap || marketJson?.metrics?.pressure_index || 1000);
+        const volatilityHint = Number(regimeJson?.atr || marketJson?.volatility?.percentage || 1);
+
+        const fallbackData = generateFallbackData(Number.isFinite(lastPrice) && lastPrice > 0 ? lastPrice : 1000).map((point) => {
+          const spread = Math.max(2, volatilityHint * 3);
+          return {
+            ...point,
+            high: Math.max(point.open, point.close) + spread,
+            low: Math.min(point.open, point.close) - spread,
+          };
+        });
+
+        applyChartData(fallbackData);
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : 'Failed to load chart data');
+        applyChartData(generateFallbackData());
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadChartData();
 
     // Handle window resize
     const handleResize = () => {
@@ -151,7 +178,6 @@ export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
     };
 
     window.addEventListener('resize', handleResize);
-    setLoading(false);
 
     return () => {
       window.removeEventListener('resize', handleResize);
@@ -174,16 +200,16 @@ export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
         </div>
       </div>
 
-      {loading ? (
-        <div className="w-full h-100 bg-gray-800/50 border border-gray-700 rounded-lg flex items-center justify-center">
-          <div className="text-gray-400">Loading chart...</div>
-        </div>
-      ) : (
-        <div
-          ref={containerRef}
-          className="w-full bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden"
-        />
-      )}
+      <div className="relative w-full bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden">
+        <div ref={containerRef} className="w-full" />
+        {loading && (
+          <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center text-sm text-gray-300">
+            Loading chart...
+          </div>
+        )}
+      </div>
+
+      {error && <div className="text-xs text-yellow-300">{error}</div>}
 
       {/* Chart Info */}
       <div className="grid grid-cols-4 gap-2 text-sm">
