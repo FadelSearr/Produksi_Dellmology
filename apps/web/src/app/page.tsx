@@ -2363,6 +2363,9 @@ export default function Home() {
     const negotiatedRaw = requests[19] as { items?: Array<{ symbol?: string; trade_type?: string; volume?: number; notional?: number }> } | null;
     const exitWhaleRaw = requests[20] as {
       events?: Array<{ symbol?: string; broker_id?: string; net_value?: number; z_score?: number; note?: string; time?: string }>;
+      data_source?: SourceAdapterMetaClient;
+      degraded?: boolean;
+      reason?: string;
     } | null;
 
     const nextDegradedSources: string[] = [];
@@ -2377,6 +2380,7 @@ export default function Home() {
     trackDegraded('Order Flow', heatmap?.data_source || null, heatmap?.degraded ? heatmap?.reason || 'degraded response' : null);
     trackDegraded('Model Confidence', confidence?.data_source || null);
     trackDegraded('Prediction', pred?.data_source || null);
+    trackDegraded('Exit Whale', exitWhaleRaw?.data_source || null, exitWhaleRaw?.degraded ? exitWhaleRaw?.reason || 'degraded response' : null);
     setDegradedSources(Array.from(new Set(nextDegradedSources)).slice(0, 4));
 
     const toAdapterHealth = (name: string, source?: SourceAdapterMetaClient | null, fallbackReason?: string | null): EndpointSourceHealthState => {
@@ -2406,6 +2410,7 @@ export default function Home() {
       toAdapterHealth('Order Flow', heatmap?.data_source || null, heatmap?.degraded ? heatmap?.reason || 'degraded response' : null),
       toAdapterHealth('Model Confidence', confidence?.data_source || null),
       toAdapterHealth('Prediction', pred?.data_source || null),
+      toAdapterHealth('Exit Whale', exitWhaleRaw?.data_source || null, exitWhaleRaw?.degraded ? exitWhaleRaw?.reason || 'degraded response' : null),
     ]);
 
     const snapshotRows = (snapshots?.snapshots || [])
