@@ -2065,6 +2065,13 @@ function LeftSidebar({
     onWatchlistUpdate(watchlist);
   }, [onWatchlistUpdate, watchlist]);
 
+  const watchlistScores = watchlist
+    .map((item) => Number(item.score || 0))
+    .filter((value) => Number.isFinite(value));
+  const watchlistAvgUps = watchlistScores.length > 0 ? watchlistScores.reduce((sum, value) => sum + value, 0) / watchlistScores.length : 0;
+  const topUpsItem = watchlist.length > 0 ? watchlist.reduce((best, item) => (item.score > best.score ? item : best), watchlist[0]) : null;
+  const weakUpsItem = watchlist.length > 0 ? watchlist.reduce((worst, item) => (item.score < worst.score ? item : worst), watchlist[0]) : null;
+
   return (
     <Card className="h-full border-r border-t-0 border-l-0 border-b-0 rounded-none w-64 flex flex-col">
       <SectionHeader title="Discovery" icon={LayoutGrid} />
@@ -2130,6 +2137,23 @@ function LeftSidebar({
         <div className="px-3 py-2 text-[10px] text-slate-500 uppercase tracking-wider font-bold flex justify-between">
           <span>Watchlist</span>
           <span className={coolingOffActive ? 'text-amber-400 font-mono' : 'text-slate-600 font-mono'}>{coolingOffActive ? 'LOCKED' : 'READY'}</span>
+        </div>
+        <div className="px-3 pb-2 grid grid-cols-3 gap-1 text-[9px] font-mono">
+          <div className="border border-slate-800 rounded px-2 py-1 bg-slate-900/50 text-slate-400" title="Average Unified Power Score watchlist aktif">
+            {`AVG ${watchlistAvgUps.toFixed(0)}`}
+          </div>
+          <div
+            className="border border-emerald-500/30 rounded px-2 py-1 bg-emerald-500/10 text-emerald-300"
+            title={topUpsItem ? `Top UPS ${topUpsItem.symbol} ${Math.round(topUpsItem.score)}/100` : 'Top UPS unavailable'}
+          >
+            {`TOP ${topUpsItem ? topUpsItem.symbol : '-'}`}
+          </div>
+          <div
+            className="border border-rose-500/30 rounded px-2 py-1 bg-rose-500/10 text-rose-300"
+            title={weakUpsItem ? `Lowest UPS ${weakUpsItem.symbol} ${Math.round(weakUpsItem.score)}/100` : 'Lowest UPS unavailable'}
+          >
+            {`WEAK ${weakUpsItem ? weakUpsItem.symbol : '-'}`}
+          </div>
         </div>
         <div className="space-y-px">
           {watchlist.map((item) => (
