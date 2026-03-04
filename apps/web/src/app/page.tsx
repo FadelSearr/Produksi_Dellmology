@@ -3611,6 +3611,37 @@ function BottomPanel({
   const globalLockDetail = globalLockGuards.join(' | ');
   const telegramLockDetail = actionDockBlockReasons.telegram.join(' | ');
   const backtestLockDetail = actionDockBlockReasons.backtest.join(' | ');
+  const latestSignalSnapshot = signalAudit.rows[0] || null;
+  const latestSnapshotEpoch = latestSignalSnapshot ? new Date(latestSignalSnapshot.createdAt).getTime() : null;
+  const snapshotReferenceEpoch = engineHeartbeat.checkedAt ? new Date(engineHeartbeat.checkedAt).getTime() : null;
+  const latestSnapshotAgeMinutes =
+    latestSnapshotEpoch && snapshotReferenceEpoch && Number.isFinite(latestSnapshotEpoch) && Number.isFinite(snapshotReferenceEpoch)
+      ? Math.max(0, Math.round((snapshotReferenceEpoch - latestSnapshotEpoch) / 60000))
+      : null;
+  const snapshotPendingCount = signalAudit.rows.filter((row) => row.outcome === 'PENDING').length;
+  const snapshotWinRatePct = signalAudit.evaluated > 0 ? (signalAudit.wins / signalAudit.evaluated) * 100 : 0;
+  const snapshotFreshTone =
+    latestSnapshotAgeMinutes === null
+      ? 'text-slate-500 border-slate-800 bg-slate-900/30'
+      : latestSnapshotAgeMinutes <= 30
+        ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
+        : latestSnapshotAgeMinutes <= 120
+          ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+          : 'text-rose-300 border-rose-500/40 bg-rose-500/10';
+  const snapshotWinTone =
+    signalAudit.evaluated <= 0
+      ? 'text-slate-500 border-slate-800 bg-slate-900/30'
+      : snapshotWinRatePct >= 60
+        ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
+        : snapshotWinRatePct >= 45
+          ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+          : 'text-rose-300 border-rose-500/40 bg-rose-500/10';
+  const snapshotPendingTone =
+    snapshotPendingCount <= 0
+      ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
+      : snapshotPendingCount <= 1
+        ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+        : 'text-rose-300 border-rose-500/40 bg-rose-500/10';
   const riskEditorLockDetail =
     riskConfigLockReason ||
     `Runtime risk config locked (chain=${riskConfigLockMeta.checkedRows}, hash=${riskConfigLockMeta.hashMismatches}, linkage=${riskConfigLockMeta.linkageMismatches})`;
@@ -3992,6 +4023,26 @@ function BottomPanel({
             title={globalLockGuards.length > 0 ? `Global lock guards (${globalLockGuards.length}): ${globalLockDetail}` : 'No active global lock guard'}
           >
             {`GLOBAL LOCKS ${globalLockGuards.length}`}
+          </div>
+          <div className="grid grid-cols-3 gap-1">
+            <div
+              className={cn('text-[9px] font-mono border rounded px-2 py-1 text-center', snapshotFreshTone)}
+              title={latestSignalSnapshot ? `Last snapshot ${new Date(latestSignalSnapshot.createdAt).toLocaleString('id-ID')} | Signal ${latestSignalSnapshot.signal}` : 'No snapshot logged for active symbol'}
+            >
+              {`SNAP ${latestSnapshotAgeMinutes === null ? 'N/A' : `${latestSnapshotAgeMinutes}m`}`}
+            </div>
+            <div
+              className={cn('text-[9px] font-mono border rounded px-2 py-1 text-center', snapshotWinTone)}
+              title={signalAudit.evaluated > 0 ? `Snapshot evaluated ${signalAudit.evaluated} | Win ${signalAudit.wins} | Loss ${signalAudit.losses}` : 'No evaluated snapshot yet'}
+            >
+              {`S-WR ${signalAudit.evaluated > 0 ? `${snapshotWinRatePct.toFixed(0)}%` : 'N/A'}`}
+            </div>
+            <div
+              className={cn('text-[9px] font-mono border rounded px-2 py-1 text-center', snapshotPendingTone)}
+              title={`Pending snapshot outcomes ${snapshotPendingCount} from ${signalAudit.rows.length} recent logs`}
+            >
+              {`S-PEND ${snapshotPendingCount}`}
+            </div>
           </div>
           {telegramBlocked ? (
             <div className="text-[9px] text-amber-300 border border-amber-500/30 rounded px-2 py-1 bg-amber-500/10">
