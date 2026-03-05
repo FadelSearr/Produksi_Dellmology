@@ -3824,6 +3824,12 @@ function BottomPanel({
   const filteredRecoveryEscalationEvents = recoveryEscalationRecentEvents.filter(
     (item) => !item.source || item.source === recoveryTelemetrySource,
   );
+  const [recoveryEscalationInvestigateSignature, setRecoveryEscalationInvestigateSignature] = useState<string | null>(null);
+  const recoveryEscalationInvestigateSignatureActive =
+    recoveryEscalationInvestigateSignature &&
+    filteredRecoveryEscalationEvents.some((item) => item.signature === recoveryEscalationInvestigateSignature)
+      ? recoveryEscalationInvestigateSignature
+      : null;
   const recoveryEscalationSelectedSource = recoveryEscalationSourceStats.find((item) => item.source === recoveryTelemetrySource) || null;
   const bearishRiskBullets = extractBearishRiskBullets(adversarialNarrative.bearish);
   const adversarialChecklist = buildAdversarialChecklist({
@@ -4461,8 +4467,36 @@ function BottomPanel({
             ) : null}
             {filteredRecoveryEscalationEvents.length > 0 ? (
               <div className="space-y-1 border-t border-slate-800 pt-1">
+                {recoveryEscalationInvestigateSignatureActive ? (
+                  <div className="flex items-center justify-between gap-2 text-[9px] text-cyan-300">
+                    <span className="truncate" title={recoveryEscalationInvestigateSignatureActive}>{`Investigate ${recoveryEscalationInvestigateSignatureActive}`}</span>
+                    <button
+                      onClick={() => setRecoveryEscalationInvestigateSignature(null)}
+                      className="text-slate-400 hover:text-slate-200"
+                      title="Clear investigate signature"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                ) : null}
                 {filteredRecoveryEscalationEvents.slice(0, 3).map((item) => (
-                  <div key={item.id} className="flex items-center justify-between gap-1">
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      if (item.source && ['deadman', 'cooling-off', 'deploy-gate'].includes(item.source)) {
+                        onRecoveryTelemetrySourceChange(item.source as RecoveryTelemetrySource);
+                      }
+                      const nextSignature = item.signature && item.signature === recoveryEscalationInvestigateSignatureActive ? null : item.signature || null;
+                      setRecoveryEscalationInvestigateSignature(nextSignature);
+                    }}
+                    className={cn(
+                      'w-full flex items-center justify-between gap-1 text-left rounded px-1 py-0.5',
+                      recoveryEscalationInvestigateSignatureActive && item.signature === recoveryEscalationInvestigateSignatureActive
+                        ? 'border border-cyan-500/40 bg-cyan-500/10'
+                        : 'border border-transparent hover:border-slate-700/60 hover:bg-slate-900/50',
+                    )}
+                    title={`Investigate ${item.signature || 'event'} | click to focus source`}
+                  >
                     <span
                       className={cn(
                         item.eventType === 'DETECTED'
@@ -4481,7 +4515,7 @@ function BottomPanel({
                       {item.source || '-'}
                     </span>
                     <span className="text-slate-500">{new Date(item.createdAt).toLocaleTimeString('id-ID')}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             ) : (
