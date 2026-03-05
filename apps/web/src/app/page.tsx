@@ -4746,9 +4746,14 @@ export default function Home() {
     lastStatus: 'IDLE',
     recentLogs: [],
   });
-  const [recoveryEscalationAck, setRecoveryEscalationAck] = useState<{ signature: string | null; silencedUntil: string | null }>({
+  const [recoveryEscalationAck, setRecoveryEscalationAck] = useState<{
+    signature: string | null;
+    silencedUntil: string | null;
+    ackedAt: string | null;
+  }>({
     signature: null,
     silencedUntil: null,
+    ackedAt: null,
   });
 
   useEffect(() => {
@@ -4761,17 +4766,27 @@ export default function Home() {
       const parsed = JSON.parse(raw) as {
         signature?: unknown;
         silencedUntil?: unknown;
+        ackedAt?: unknown;
       };
       const signature = typeof parsed.signature === 'string' ? parsed.signature : null;
       const silencedUntil = typeof parsed.silencedUntil === 'string' ? parsed.silencedUntil : null;
+      const ackedAtRaw = typeof parsed.ackedAt === 'string' ? parsed.ackedAt : null;
       const validSilencedUntil = silencedUntil && Number.isFinite(new Date(silencedUntil).getTime()) ? silencedUntil : null;
+      const validAckedAt = ackedAtRaw && Number.isFinite(new Date(ackedAtRaw).getTime()) ? ackedAtRaw : null;
 
       if (!signature || !validSilencedUntil || new Date(validSilencedUntil).getTime() <= Date.now()) {
         window.localStorage.removeItem(RECOVERY_ESCALATION_ACK_STORAGE_KEY);
         return;
       }
 
-      setRecoveryEscalationAck({ signature, silencedUntil: validSilencedUntil });
+      const fallbackAckedAt = new Date(
+        new Date(validSilencedUntil).getTime() - ROADMAP_DEFAULTS.recoveryEscalationAckMinutes * 60 * 1000,
+      ).toISOString();
+      setRecoveryEscalationAck({
+        signature,
+        silencedUntil: validSilencedUntil,
+        ackedAt: validAckedAt || fallbackAckedAt,
+      });
     } catch {
       window.localStorage.removeItem(RECOVERY_ESCALATION_ACK_STORAGE_KEY);
     }
@@ -4779,16 +4794,17 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      if (!recoveryEscalationAck.signature || !recoveryEscalationAck.silencedUntil) {
+      if (!recoveryEscalationAck.signature || !recoveryEscalationAck.silencedUntil || !recoveryEscalationAck.ackedAt) {
         window.localStorage.removeItem(RECOVERY_ESCALATION_ACK_STORAGE_KEY);
         return;
       }
 
       const expiryMs = new Date(recoveryEscalationAck.silencedUntil).getTime();
-      if (!Number.isFinite(expiryMs) || expiryMs <= Date.now()) {
+      const ackedAtMs = new Date(recoveryEscalationAck.ackedAt).getTime();
+      if (!Number.isFinite(expiryMs) || expiryMs <= Date.now() || !Number.isFinite(ackedAtMs)) {
         window.localStorage.removeItem(RECOVERY_ESCALATION_ACK_STORAGE_KEY);
-        if (recoveryEscalationAck.signature || recoveryEscalationAck.silencedUntil) {
-          setRecoveryEscalationAck({ signature: null, silencedUntil: null });
+        if (recoveryEscalationAck.signature || recoveryEscalationAck.silencedUntil || recoveryEscalationAck.ackedAt) {
+          setRecoveryEscalationAck({ signature: null, silencedUntil: null, ackedAt: null });
         }
         return;
       }
@@ -7682,11 +7698,34 @@ export default function Home() {
           .map((item) => `${item.status}@${item.source} ${new Date(item.at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`)
           .join('  •  ')
       : 'No recent recovery events';
+  useEffect(() => {
+    if (!recoveryEscalationAck.signature || !recoveryEscalationAck.silencedUntil || !recoveryEscalationAck.ackedAt) {
+      return;
+    }
+
+    const ackedAtMs = new Date(recoveryEscalationAck.ackedAt).getTime();
+    const silencedUntilMs = new Date(recoveryEscalationAck.silencedUntil).getTime();
+    if (!Number.isFinite(ackedAtMs) || !Number.isFinite(silencedUntilMs)) {
+      setRecoveryEscalationAck({ signature: null, silencedUntil: null, ackedAt: null });
+      return;
+    }
+
+    const ackMinutes = Math.max(1, Math.floor(runtimeRecoveryEscalationAckMinutes));
+    const cappedUntilMs = ackedAtMs + ackMinutes * 60 * 1000;
+    if (silencedUntilMs > cappedUntilMs) {
+      setRecoveryEscalationAck((prev) => ({
+        ...prev,
+        silencedUntil: new Date(cappedUntilMs).toISOString(),
+      }));
+    }
+  }, [recoveryEscalationAck.ackedAt, recoveryEscalationAck.signature, recoveryEscalationAck.silencedUntil, runtimeRecoveryEscalationAckMinutes]);
   const acknowledgeRecoveryEscalation = useCallback(() => {
     const ackMinutes = Math.max(1, Math.floor(runtimeRecoveryEscalationAckMinutes));
+    const ackedAt = new Date().toISOString();
     setRecoveryEscalationAck({
       signature: recoveryEscalationSignature,
       silencedUntil: new Date(Date.now() + ackMinutes * 60 * 1000).toISOString(),
+      ackedAt,
     });
   }, [recoveryEscalationSignature, runtimeRecoveryEscalationAckMinutes]);
   const combatCriticalLocks = buildActiveLockGuards({
@@ -7827,7 +7866,7 @@ export default function Home() {
         <div className="border-b border-slate-800 bg-slate-900/60 px-4 py-1 text-[10px] font-mono text-slate-400 flex items-center justify-between gap-3">
           <div>{`RECOVERY ESCALATION ACKNOWLEDGED | resume in ${Math.ceil(recoveryEscalationSilencedRemainingMs / 1000)}s | level ${recoveryEscalationLevel}`}</div>
           <button
-            onClick={() => setRecoveryEscalationAck({ signature: null, silencedUntil: null })}
+            onClick={() => setRecoveryEscalationAck({ signature: null, silencedUntil: null, ackedAt: null })}
             className="text-[10px] font-bold px-2 py-0.5 rounded border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
             title="Show escalation banner immediately"
           >
