@@ -3831,6 +3831,7 @@ function BottomPanel({
       : snapshotPendingCount <= 1
         ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
         : 'text-rose-300 border-rose-500/40 bg-rose-500/10';
+  const fingerprintRecoveryBlocked = actionState.busy || deadmanResetCooldown > 0 || riskConfigLocked;
   const riskEditorLockDetail =
     riskConfigLockReason ||
     `Runtime risk config locked (chain=${riskConfigLockMeta.checkedRows}, hash=${riskConfigLockMeta.hashMismatches}, linkage=${riskConfigLockMeta.linkageMismatches})`;
@@ -4286,6 +4287,13 @@ function BottomPanel({
               <div className="text-slate-600">{`Done ${new Date(backtestSummary.completedAt).toLocaleTimeString('id-ID')}`}</div>
             </div>
           ) : null}
+          {volumeFingerprint.hardReset ? (
+            <div className="border border-rose-500/40 rounded px-2 py-1 bg-rose-500/10 text-[9px] font-mono text-rose-300 space-y-1">
+              <div className="uppercase tracking-wider">FPRINT FAIL Recovery</div>
+              <div>{`Dev ${volumeFingerprint.deviationPct.toFixed(1)}% | Obs ${Math.round(volumeFingerprint.observedVolume).toLocaleString('id-ID')} | Ref ${Math.round(volumeFingerprint.referenceVolume).toLocaleString('id-ID')}`}</div>
+              <div className="text-rose-200">{volumeFingerprint.reason || 'Statistical fingerprint mismatch; execute hard reset and token refresh flow.'}</div>
+            </div>
+          ) : null}
           <div className="border border-slate-800 rounded px-2 py-1 bg-slate-900/40 text-[9px] font-mono text-slate-400 space-y-1">
             <div className="text-slate-500 uppercase tracking-wider">Signal Audit Trail</div>
             <div>{`Eval ${signalAudit.evaluated} | W/L ${signalAudit.wins}/${signalAudit.losses}`}</div>
@@ -4312,7 +4320,7 @@ function BottomPanel({
           </div>
           <button
             onClick={onResetDeadman}
-            disabled={actionState.busy || deadmanResetCooldown > 0 || riskConfigLocked}
+            disabled={fingerprintRecoveryBlocked}
             title={
               actionState.busy
                 ? 'Reset blocked: action in progress'
@@ -4320,12 +4328,20 @@ function BottomPanel({
                   ? `Reset blocked: rate-limit cooldown ${deadmanResetCooldown}s`
                   : riskConfigLocked
                     ? 'Reset blocked: runtime risk config locked'
-                    : 'Reset deadman lock and refresh heartbeat guard'
+                    : volumeFingerprint.hardReset
+                      ? 'Run hard reset recovery: reset deadman lock, refresh heartbeat, and request token refresh'
+                      : 'Reset deadman lock and refresh heartbeat guard'
             }
             className="flex items-center justify-center space-x-2 bg-amber-600/20 hover:bg-amber-600/30 disabled:opacity-50 text-amber-300 text-xs font-bold py-2 rounded transition-colors border border-amber-500/30"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            <span>{deadmanResetCooldown > 0 ? `Reset Deadman (${deadmanResetCooldown}s)` : 'Reset Deadman'}</span>
+            <span>
+              {deadmanResetCooldown > 0
+                ? `${volumeFingerprint.hardReset ? 'Hard Reset' : 'Reset Deadman'} (${deadmanResetCooldown}s)`
+                : volumeFingerprint.hardReset
+                  ? 'Hard Reset Recovery'
+                  : 'Reset Deadman'}
+            </span>
           </button>
           <button
             onClick={onResetCoolingOff}
