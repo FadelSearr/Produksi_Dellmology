@@ -24,6 +24,23 @@ interface BrokerFlowTableProps {
 /**
  * Broker Flow table showing daily heatmap and accumulation data
  */
+// Helper: determine broker character profile
+function getBrokerCharacterProfile(broker: BrokerEntry): string {
+  if (broker.is_whale) {
+    if ((broker.consistency_score || 0) > 0.8 && (broker.active_days || 0) > 5) return 'Aggressive Accumulator';
+    if ((broker.consistency_score || 0) < 0.5) return 'Opportunistic Whale';
+    return 'Strategic Whale';
+  }
+  if (broker.is_retail) {
+    if ((broker.consistency_score || 0) > 0.7) return 'Disciplined Retail';
+    return 'Speculative Retail';
+  }
+  if ((broker.consistency_score || 0) > 0.85) return 'Algorithmic Trader';
+  if ((broker.net_buy_value || 0) > 0 && (broker.active_days || 0) > 6) return 'Long-Term Accumulator';
+  if ((broker.net_buy_value || 0) < 0 && (broker.active_days || 0) < 3) return 'Short-Term Seller';
+  return 'Mixed Strategy';
+}
+
 export const BrokerFlowTable: React.FC<BrokerFlowTableProps> = ({
   data,
   symbol,
@@ -98,13 +115,17 @@ export const BrokerFlowTable: React.FC<BrokerFlowTableProps> = ({
             {filteredData.slice(0, 5).map((broker, idx) => {
               const netValue = broker.net_buy_value || 0;
               const isPositive = netValue >= 0;
+              const character = getBrokerCharacterProfile(broker);
 
               return (
                 <tr key={broker.broker_id || idx} className="border-b border-gray-700/50 hover:bg-gray-800/30 transition-colors">
                   <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${isPositive ? 'bg-green-500' : 'bg-red-500'}`} />
-                      <span className="text-gray-300 font-semibold">{broker.broker_id}</span>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${isPositive ? 'bg-green-500' : 'bg-red-500'}`} />
+                        <span className="text-gray-300 font-semibold">{broker.broker_id}</span>
+                      </div>
+                      <span className="text-xs text-gray-400 italic">{character}</span>
                     </div>
                   </td>
                   <td className="text-right px-3 py-2 font-mono">
