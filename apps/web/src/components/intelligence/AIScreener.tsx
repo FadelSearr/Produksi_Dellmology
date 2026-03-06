@@ -129,7 +129,7 @@ export const AIScreener = ({
     };
 
     runScreener();
-  }, [selectedMode, priceRange.min, priceRange.max]);
+  }, [selectedMode, priceRange]);
 
   return (
     <div className="space-y-4">

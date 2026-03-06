@@ -15,7 +15,7 @@ export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<CandleData[]>([]);
+  // chart data is managed directly via the chart API; avoid storing duplicate state
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -99,7 +99,7 @@ export const AdvancedChart = ({ symbol = 'BBCA' }: { symbol: string }) => {
     });
 
     const applyChartData = (chartData: CandleData[]) => {
-      setData(chartData);
+      // Update chart series directly; avoid calling React setState inside this effect
       candlestickSeries.setData(chartData);
 
       const volumeData = chartData.map((point, index) => ({

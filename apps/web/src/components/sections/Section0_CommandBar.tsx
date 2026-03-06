@@ -26,8 +26,6 @@ interface Section0Props {
  */
 export const Section0_CommandBar: React.FC<Section0Props> = ({
   onSymbolChange,
-  marketRegime = 'BULLISH',
-  volatility: initialVolatility = 'HIGH',
   systemHealth = { sse: true, db: true, shield: true },
   rateLimitUsage = 65,
 }) => {
@@ -50,14 +48,14 @@ export const Section0_CommandBar: React.FC<Section0Props> = ({
           nickel: json.nickel,
           ihsg: json.ihsg,
         });
-      } catch (e) {
+      } catch {
         // ignore
       }
     };
     fetchCommodities();
     const interval = setInterval(fetchCommodities, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [systemHealth.shield]);
 
   const [searchInput, setSearchInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -116,7 +114,7 @@ export const Section0_CommandBar: React.FC<Section0Props> = ({
         // shield: if external_queue or processed_cache_size present, assume shield active
         const shield = json.checked_at ? true : systemHealth.shield;
         setLiveHealth({ sse: !!sse, db: !!db, shield: !!shield });
-      } catch (e) {
+      } catch {
         // keep previous
       }
     };
@@ -126,7 +124,7 @@ export const Section0_CommandBar: React.FC<Section0Props> = ({
       mounted = false;
       clearInterval(t);
     };
-  }, []);
+  }, [systemHealth.shield]);
 
   // Suggestions logic (unchanged)
   const topStocks = ['BBCA', 'ASII', 'TLKM', 'GOTO', 'BMRI'];
