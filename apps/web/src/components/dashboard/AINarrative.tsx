@@ -15,16 +15,21 @@ const AINarrative: React.FC = () => {
     return null
   }, [events])
 
-  const latestML = useMemo(() => {
-    if (!events || events.length === 0) return null
+  let latestML: any = null
+  if (events && events.length > 0) {
     for (const ev of events) {
       if (!ev) continue
       // prefer merged ml_inference field inside broker payload
-      if (ev.ml_inference) return { symbol: ev.symbol || ev?.stats?.symbol, inference: ev.ml_inference }
-      if (ev.type === 'ml_inference') return ev
+      if (ev.ml_inference) {
+        latestML = { symbol: ev.symbol || ev?.stats?.symbol, inference: ev.ml_inference }
+        break
+      }
+      if (ev.type === 'ml_inference') {
+        latestML = ev
+        break
+      }
     }
-    return null
-  }, [events])
+  }
 
   const summary = latestBrokerSummary ? `Brokers: ${latestBrokerSummary.stats?.total_brokers ?? (latestBrokerSummary.brokers ? latestBrokerSummary.brokers.length : 'N/A')} • Whales: ${latestBrokerSummary.stats?.whales ?? 'N/A'} • Anomalous: ${latestBrokerSummary.stats?.anomalous ?? 'N/A'}` : 'No narrative yet.'
 
