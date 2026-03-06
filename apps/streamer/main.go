@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-    "sync/atomic"
+	"sync/atomic"
 	"time"
 
 	"context"
@@ -1219,6 +1219,33 @@ func startHTTPServer() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
+
+	// Basic Prometheus-style metrics endpoint (text exposition)
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		failures := atomic.LoadInt64(&mlFetchFailures)
+		successes := atomic.LoadInt64(&mlFetchSuccesses)
+		mlMutex.Lock()
+		lastErr := mlLastError
+		lastChecked := mlLastChecked
+		mlMutex.Unlock()
+
+		fmt.Fprintf(w, "# HELP ml_fetch_successes Total successful ML fetches\n")
+		fmt.Fprintf(w, "# TYPE ml_fetch_successes counter\n")
+		fmt.Fprintf(w, "ml_fetch_successes %d\n", successes)
+
+		fmt.Fprintf(w, "# HELP ml_fetch_failures Total failed ML fetch attempts\n")
+		fmt.Fprintf(w, "# TYPE ml_fetch_failures counter\n")
+		fmt.Fprintf(w, "ml_fetch_failures %d\n", failures)
+
+		// expose last error as a labeled gauge if present
+		if lastErr != "" {
+			esc := escapeLabelValue(lastErr)
+			fmt.Fprintf(w, "# HELP ml_last_error Info about last ML fetch error (label)\n")
+			fmt.Fprintf(w, "# TYPE ml_last_error gauge\n")
+			fmt.Fprintf(w, "ml_last_error{error=\"%s\",checked=\"%s\"} 1\n", esc, lastChecked.UTC().Format(time.RFC3339))
+		}
+	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "OK")
@@ -1421,4 +1448,14 @@ func recordNegotiatedTrade(t ProcessedTrade) {
 	if len(negotiatedTrades) > 100 {
 		negotiatedTrades = negotiatedTrades[len(negotiatedTrades)-100:]
 	}
+}
+
+// escapeLabelValue makes a string safe for Prometheus label value quoting
+func escapeLabelValue(s string) string {
+	// escape backslashes and double quotes and newlines
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	return s
 }
