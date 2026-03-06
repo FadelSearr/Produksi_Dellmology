@@ -18,6 +18,16 @@ def load_model():
     spec = importlib.util.spec_from_file_location('cnn_model', path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    # prefer explicit keras_model if present
+    try:
+        km_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'keras_model.py'))
+        if os.path.exists(km_path):
+            spec2 = importlib.util.spec_from_file_location('keras_model', km_path)
+            mod2 = importlib.util.module_from_spec(spec2)
+            spec2.loader.exec_module(mod2)
+            return mod2.SimpleCNN()
+    except Exception:
+        pass
     return mod.SimpleCNN()
 
 

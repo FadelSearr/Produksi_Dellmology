@@ -18,7 +18,10 @@ const AINarrative: React.FC = () => {
   const latestML = useMemo(() => {
     if (!events || events.length === 0) return null
     for (const ev of events) {
-      if (ev && ev.type === 'ml_inference') return ev
+      if (!ev) continue
+      // prefer merged ml_inference field inside broker payload
+      if (ev.ml_inference) return { symbol: ev.symbol || ev?.stats?.symbol, inference: ev.ml_inference }
+      if (ev.type === 'ml_inference') return ev
     }
     return null
   }, [events])
