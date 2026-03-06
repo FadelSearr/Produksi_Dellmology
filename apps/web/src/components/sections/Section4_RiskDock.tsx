@@ -37,7 +37,6 @@ export const Section4_RiskDock: React.FC<Section4Props> = ({
   volatilityLevel = 'HIGH',
 }) => {
   const atrValue = 145.5;
-  const accountRisk = 5000000; // 5M IDR
 
   // Example beta value, in real use this should come from props or context
   const portfolioBeta = 1.62;
@@ -75,7 +74,7 @@ export const Section4_RiskDock: React.FC<Section4Props> = ({
                 <span className="text-gray-400 font-semibold">Recommended:</span>
                 <span className="text-2xl font-bold text-green-400">{maxLot}</span>
               </div>
-              <p className="text-xs text-gray-400">Max lot @ 2.5% stop loss</p>
+              <p className="text-xs text-gray-400">Max lot @ {stopLossPercent}% stop loss</p>
             </div>
 
             <button className="w-full mt-4 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white text-sm font-semibold transition-colors">

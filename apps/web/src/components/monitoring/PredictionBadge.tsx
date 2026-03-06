@@ -20,20 +20,21 @@ export function PredictionBadge({ symbol }: { symbol: string }) {
                 setLoading(true);
                 setError(null);
                 const response = await fetch(`/api/prediction?symbol=${symbol}`);
-                const result = await response.json();
+                const result = (await response.json()) as { success?: boolean; data?: unknown; message?: string } | null;
 
                 if (!response.ok || !result?.success) {
                     throw new Error(result?.message || 'Prediction not available.');
                 }
 
-                const d = result.data && typeof result.data === 'object' ? (result.data as Record<string, unknown>) : null
-                if (!d) throw new Error('Malformed prediction payload')
+                const dRaw = result.data;
+                const d = dRaw && typeof dRaw === 'object' ? (dRaw as Record<string, unknown>) : null;
+                if (!d) throw new Error('Malformed prediction payload');
 
                 setPrediction({
                     prediction: d.prediction === 'UP' ? 'UP' : 'DOWN',
                     confidence_up: typeof d.confidence_up === 'number' ? d.confidence_up : 0,
                     confidence_down: typeof d.confidence_down === 'number' ? d.confidence_down : 0,
-                })
+                });
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
             } finally {

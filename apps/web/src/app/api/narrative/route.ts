@@ -20,8 +20,10 @@ export async function POST(request: Request) {
       return NextResponse.json(buildCoolingOffLockPayload(coolingOff, 'Cooling-off active: recommendation temporarily locked'), { status: 423 });
     }
 
-    const body = await request.json();
-    const { type, data, symbol } = body;
+    const body = (await request.json()) as Record<string, unknown> | null;
+    const type = body && typeof body.type === 'string' ? body.type : undefined;
+    const data = body && typeof body.data === 'object' && body.data !== null ? (body.data as Record<string, unknown>) : undefined;
+    const symbol = body && typeof body.symbol === 'string' ? body.symbol : undefined;
 
     if (!type || !data) {
       return NextResponse.json(

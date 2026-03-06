@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Brain, Filter } from 'lucide-react';
+import { Brain } from 'lucide-react';
 import { Card } from '@/components/common/Card';
 import { AIScreener } from '@/components/intelligence/AIScreener';
 import { AINarrativeDisplay } from '@/components/intelligence/AINarrativeDisplay';
@@ -21,11 +21,7 @@ interface Section3Props {
  * - Retail sentiment divergence
  * - Multi-model voting system
  */
-export const Section3_NeuralNarrative: React.FC<Section3Props> = ({
-  symbol,
-  aiNarrative,
-  isLoading = false,
-}) => {
+export const Section3_NeuralNarrative: React.FC<Section3Props> = ({ symbol }) => {
   const [screenerMode, setScreenerMode] = useState<'DAYTRADE' | 'SWING' | 'CUSTOM'>('DAYTRADE');
   const [priceRange, setPriceRange] = useState({ min: 100, max: 10000 });
   const [sentimentData, setSentimentData] = useState<{

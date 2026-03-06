@@ -19,9 +19,9 @@ export default function ModelMetricsHistory({ symbol = 'BBCA', limit = 30 }: { s
     async function fetchMetrics() {
       try {
         const resp = await fetch(`/api/metrics?symbol=${encodeURIComponent(symbol)}&limit=${limit}`)
-        const json = await resp.json()
+        const json = (await resp.json()) as { success?: boolean; metrics?: unknown } | null
         if (!mounted) return
-        if (json.success) {
+        if (json?.success) {
           const metrics = Array.isArray(json.metrics) ? json.metrics : []
           setRows(
             metrics.map((raw) => {

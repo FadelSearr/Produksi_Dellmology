@@ -32,7 +32,7 @@ export function Screener() {
   const [results, setResults] = useState<ScreenerResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [days, setDays] = useState(7);
+  const [days] = useState(7);
   const [mode, setMode] = useState<ScreenerMode>('swing');
 
   useEffect(() => {

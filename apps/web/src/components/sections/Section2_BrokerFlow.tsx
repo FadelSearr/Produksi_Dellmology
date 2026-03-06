@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BarChart3, TrendingDown, AlertCircle } from 'lucide-react';
+import { BarChart3, AlertCircle } from 'lucide-react';
 import { Card } from '@/components/common/Card';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { BrokerFlowTable } from '@/components/tables/BrokerFlowTable';
@@ -33,7 +33,7 @@ export const Section2_BrokerFlow: React.FC<Section2Props> = ({
     avg_net_value?: number;
     std_deviation?: number;
   } | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  
 
   const daysForTimeline = (t: string) => {
     switch (t) {
@@ -48,20 +48,21 @@ export const Section2_BrokerFlow: React.FC<Section2Props> = ({
   // fetch broker flow whenever relevant params change
   useEffect(() => {
     const load = async () => {
-      setIsLoading(true);
+      
       try {
         const resp = await fetch(`/api/broker-flow?symbol=${encodeURIComponent(symbol)}&days=${daysForTimeline(timelineType)}&filter=${
           filterType === 'ALL' ? 'mix' : filterType.toLowerCase()
         }`);
         if (resp.ok) {
-          const json = await resp.json();
-          setBrokerData(json.brokers || []);
-          setBrokerStats(json.stats || null);
+          const json = (await resp.json()) as { brokers?: unknown[]; stats?: Record<string, unknown> | null } | null;
+          const brokersRaw = Array.isArray(json?.brokers) ? json!.brokers! : [];
+          const brokers = brokersRaw.map((b) => (typeof b === 'object' && b ? (b as Record<string, unknown>) : {}));
+          setBrokerData(brokers as Record<string, unknown>[]);
+          setBrokerStats(json?.stats ?? null);
         }
       } catch (err) {
         console.error('broker flow fetch error', err);
       } finally {
-        setIsLoading(false);
       }
     };
     if (symbol) load();

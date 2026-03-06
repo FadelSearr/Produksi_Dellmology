@@ -149,14 +149,24 @@ export async function GET(request: Request) {
 
     const result = await db.query(query, [symbol, `${days} days`]);
 
-    type RawRow = Record<string, unknown>;
+    interface RawRow {
+      broker_id?: string | null;
+      total_net_buy?: number | string | null;
+      active_days?: number | string | null;
+      avg_buy_price?: number | string | null;
+      daily_data?: unknown;
+    }
+
     const rows = (result.rows as RawRow[]) || [];
     const brokers = rows.map((row) => {
       const broker_id = String(row.broker_id ?? '');
       const total_net_buy = Number(row.total_net_buy ?? 0);
       const active_days = Number(row.active_days ?? 0);
       const avg_buy_price = Number(row.avg_buy_price ?? 0);
-      const daily_data = (row.daily_data as number[]) ?? [];
+      const daily_data_raw = row.daily_data;
+      const daily_data: number[] = Array.isArray(daily_data_raw)
+        ? (daily_data_raw as unknown[]).map((v) => Number(v || 0))
+        : [];
 
       return {
         broker_id,
