@@ -410,24 +410,64 @@ func sendTelegramSystemAlert(client *http.Client, targetURL string, event string
 		return err
 	}
 
+	// Best-effort: also persist outgoing alerts locally for debugging/verification
+	go func(b []byte) {
+		_ = os.MkdirAll("logs", 0755)
+		f, err := os.OpenFile("logs/telegram_alerts.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		ts := time.Now().UTC().Format(time.RFC3339)
+		f.WriteString(ts + " ")
+		f.Write(b)
+		f.WriteString("\n")
+	}(body)
+
 	request, err := http.NewRequest(http.MethodPost, targetURL, strings.NewReader(string(body)))
 	if err != nil {
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
 
-	response, err := client.Do(request)
-	if err != nil {
-		return err
+	// attempt with retries
+	maxAttempts := 3
+	backoffMs := 500
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		resp, err := client.Do(request)
+		if err != nil {
+			lastErr = err
+			log.Printf("WARN: telegram alert attempt %d failed: %v", attempt, err)
+		} else {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return nil
+			}
+			lastErr = fmt.Errorf("status %d", resp.StatusCode)
+			log.Printf("WARN: telegram alert attempt %d returned status %d", attempt, resp.StatusCode)
+		}
+		// exponential backoff
+		time.Sleep(time.Duration(backoffMs*(1<<(attempt-1))) * time.Millisecond)
 	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, response.Body)
 
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("telegram alert status %d", response.StatusCode)
-	}
+	// All attempts failed — persist failed alert for inspection (best-effort)
+	go func(b []byte, errMsg string) {
+		_ = os.MkdirAll("logs", 0755)
+		f, err := os.OpenFile("logs/telegram_alerts_failed.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		ts := time.Now().UTC().Format(time.RFC3339)
+		f.WriteString(ts + " ")
+		f.WriteString(errMsg + " ")
+		f.Write(b)
+		f.WriteString("\n")
+	}(body, lastErr.Error())
 
-	return nil
+	return lastErr
 }
 
 func startWorkerHeartbeatReporter() {

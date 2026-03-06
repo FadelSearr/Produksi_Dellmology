@@ -1,8 +1,8 @@
 package main
 
 import (
-    "math"
-    "testing"
+	"math"
+	"testing"
 )
 
 func TestCalculateZScore(t *testing.T) {
