@@ -87,8 +87,8 @@ export const Section3_NeuralNarrative: React.FC<Section3Props> = ({
         <h2 className="text-2xl font-bold text-white">🧠 Neural Narrative Hub</h2>
       </div>
 
-      // Removed duplicate useEffect
-            {sentimentData.newsEvents && sentimentData.newsEvents.length > 0 && (
+      {/* Removed duplicate useEffect */}
+        {sentimentData.newsEvents && sentimentData.newsEvents.length > 0 && (
               <div className="mt-2">
                 <div className="text-xs font-bold text-cyan-300 mb-1">📰 News Impact Overlay</div>
                 <ul>
