@@ -30,8 +30,22 @@ $maxAttempts = 60
 $attempt = 0
 while ($attempt -lt $maxAttempts) {
   $attempt++
-  $conn = Test-NetConnection -ComputerName 127.0.0.1 -Port 5433 -WarningAction SilentlyContinue
-  if ($conn.TcpTestSucceeded) { break }
+  # Prefer Test-NetConnection when available (Windows), otherwise use a TcpClient fallback (cross-platform pwsh)
+  $conn = $null
+  if (Get-Command -Name Test-NetConnection -ErrorAction SilentlyContinue) {
+    $conn = Test-NetConnection -ComputerName 127.0.0.1 -Port 5433 -WarningAction SilentlyContinue
+    if ($conn -and $conn.TcpTestSucceeded) { break }
+  } else {
+    try {
+      $tcp = New-Object System.Net.Sockets.TcpClient
+      $async = $tcp.BeginConnect('127.0.0.1', 5433, $null, $null)
+      $wait = $async.AsyncWaitHandle.WaitOne(1000)
+      if ($wait -and $tcp.Connected) { $tcp.EndConnect($async); $tcp.Close(); break }
+      $tcp.Close()
+    } catch {
+      # ignore and retry
+    }
+  }
   Start-Sleep -Seconds 2
 }
 if ($attempt -ge $maxAttempts) {
