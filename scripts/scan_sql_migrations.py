@@ -40,8 +40,10 @@ def main():
     issues = []
     for f in sql_files:
         findings = scan_file(f)
-        if findings:
-            issues.append((f, findings))
+        # Only treat findings as issues if the file is NOT guarded by known keywords
+        unguarded_findings = [fi for fi in findings if not fi[3]]
+        if unguarded_findings:
+            issues.append((f, unguarded_findings))
 
     if not issues:
         print("No risky patterns detected in db/init SQL files.")
