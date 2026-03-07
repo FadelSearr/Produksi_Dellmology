@@ -23,6 +23,8 @@ from exit_whale import main as exit_whale_main
 from apscheduler.schedulers.background import BackgroundScheduler
 from dellmology.utils.model_retrain_scheduler import schedule_retraining
 from dellmology.models.model_registry import registry as model_registry
+from dellmology.models import retrain_manager
+from dellmology.backtest.backtest_runner import run_backtest
 
 # Setup logging
 setup_logging()
@@ -83,6 +85,36 @@ async def retrain_model(request: Request, epochs: int = 5):
         raise HTTPException(status_code=401, detail="Unauthorized")
     job_id = model_registry.trigger_retrain(epochs=epochs)
     return {"job_id": job_id, "status": "started"}
+
+
+@app.get('/models/checkpoints')
+async def list_checkpoints():
+    return {'checkpoints': retrain_manager.list_checkpoints()}
+
+
+@app.post('/models/checkpoint')
+async def save_checkpoint(request: Request):
+    token = request.headers.get('x-admin-token')
+    if not token or token != Config.ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail='Unauthorized')
+    body = await request.json()
+    model_name = body.get('model_name')
+    metrics = body.get('metrics', {})
+    name = retrain_manager.save_checkpoint(model_name, metrics, metadata=body.get('metadata'))
+    return {'saved': True, 'name': name}
+
+
+@app.post('/models/backtest')
+async def models_backtest(request: Request):
+    token = request.headers.get('x-admin-token')
+    if not token or token != Config.ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail='Unauthorized')
+    body = await request.json()
+    model_name = body.get('model_name')
+    start_date = body.get('start_date') or '2023-01-01'
+    end_date = body.get('end_date') or datetime.utcnow().date().isoformat()
+    result = run_backtest(model_name, start_date, end_date)
+    return {'backtest': result}
 
 @app.post("/models/promote")
 async def promote_model(request: Request):
