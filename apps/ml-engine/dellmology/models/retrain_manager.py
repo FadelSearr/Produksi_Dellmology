@@ -15,6 +15,12 @@ try:
 except Exception:
     boto3 = None
 
+try:
+    from dellmology.utils.supabase_client import insert_audit as _supabase_insert
+except Exception:
+    # supabase wrapper optional; continue without it
+    _supabase_insert = None
+
 ROOT = Path(__file__).parent.parent.parent
 CHECKPOINT_DIR = ROOT / "models" / "checkpoints"
 CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
@@ -32,7 +38,20 @@ def _s3_configured() -> bool:
 def _s3_client():
     if not _s3_configured():
         return None
-    return boto3.client('s3')
+    # Support custom S3 endpoints (MinIO) via environment variables
+    endpoint = os.getenv('S3_ENDPOINT') or os.getenv('AWS_ENDPOINT_URL') or os.getenv('AWS_S3_ENDPOINT')
+    # Use a session to allow explicit credentials if provided
+    session = boto3.session.Session()
+    client_kwargs = {}
+    if endpoint:
+        client_kwargs['endpoint_url'] = endpoint
+    # Allow explicit creds (useful for local MinIO)
+    ak = os.getenv('AWS_ACCESS_KEY_ID')
+    sk = os.getenv('AWS_SECRET_ACCESS_KEY')
+    if ak and sk:
+        client_kwargs['aws_access_key_id'] = ak
+        client_kwargs['aws_secret_access_key'] = sk
+    return session.client('s3', **client_kwargs)
 
 
 def save_checkpoint(model_name: str, metrics: Dict, metadata: Optional[Dict] = None) -> str:
@@ -69,6 +88,24 @@ def save_checkpoint(model_name: str, metrics: Dict, metadata: Optional[Dict] = N
             client.put_object(Bucket=bucket, Key=key, Body=json.dumps(payload).encode('utf-8'))
     except Exception:
         # ignore S3 upload failures
+        pass
+
+    # Optionally persist checkpoint metadata to Supabase when configured
+    try:
+        if _supabase_insert is not None:
+            # small payload for audit/registry
+            audit_record = {
+                'table_name': 'ml_checkpoints',
+                'operation': 'INSERT',
+                'changed_by': os.getenv('ADMIN_TOKEN') or None,
+                'payload': payload,
+            }
+            try:
+                _supabase_insert(audit_record)
+            except Exception:
+                # swallow Supabase errors; non-critical
+                pass
+    except Exception:
         pass
 
     return name

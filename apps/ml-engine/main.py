@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import sys
 from pathlib import Path
+import json
+import os
 
 # Setup path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -19,10 +21,17 @@ from config import Config, validate_config, setup_logging
 from dellmology.analysis.screener_api import router as screener_router
 from dellmology.analysis.runtime_api import router as runtime_router
 from dellmology.intelligence.api import router as xai_router
+from dellmology.api.audit_api import router as audit_router
 from broker_flow import main as broker_flow_main
 from exit_whale import main as exit_whale_main
 from apscheduler.schedulers.background import BackgroundScheduler
 from dellmology.utils.model_retrain_scheduler import schedule_retraining
+from dellmology.utils.db_utils import init_db, get_db_connection, get_db_health
+try:
+    import boto3
+except Exception:
+    boto3 = None
+from sqlalchemy import text
 from dellmology.models.model_registry import registry as model_registry
 from dellmology.models import retrain_manager
 from dellmology.backtest.backtest_runner import run_backtest
@@ -72,6 +81,75 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+def _require_admin(request: Request):
+    """Validate admin token from `x-admin-token` or `Authorization: Bearer <token>`"""
+    token = request.headers.get('x-admin-token')
+    if not token:
+        auth = request.headers.get('authorization') or request.headers.get('Authorization')
+        if auth and auth.lower().startswith('bearer '):
+            token = auth.split(' ', 1)[1].strip()
+    if not token or token != Config.ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail='Unauthorized')
+
+
+@app.middleware("http")
+async def audit_middleware(request: Request, call_next):
+    """Best-effort audit of admin requests. Does not block request on failure."""
+    is_admin = False
+    try:
+        token = request.headers.get('x-admin-token') or request.headers.get('authorization')
+        if token and token.startswith('Bearer '):
+            token = token.split(' ', 1)[1].strip()
+        if token and token == Config.ADMIN_TOKEN:
+            is_admin = True
+    except Exception:
+        is_admin = False
+
+    # Read body safely for logging and restore for downstream handlers
+    body_bytes = b''
+    try:
+        body_bytes = await request.body()
+    except Exception:
+        body_bytes = b''
+
+    # Re-insert body for downstream
+    async def receive_gen():
+        more_body = False
+        return {"type": "http.request", "body": body_bytes, "more_body": more_body}
+
+    try:
+        request._receive = receive_gen  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    response = await call_next(request)
+
+    if is_admin:
+        # Best-effort write to audit table
+        try:
+            init_db()
+            payload_text = ''
+            if body_bytes:
+                try:
+                    payload_text = body_bytes.decode('utf-8')
+                except Exception:
+                    payload_text = '[binary]'
+            if len(payload_text) > 4000:
+                payload_text = payload_text[:4000] + '...'
+            with get_db_connection() as conn:
+                q = text("INSERT INTO public.ml_audit_log (table_name, operation, changed_by, payload) VALUES (:table_name, :op, :user, :payload)")
+                conn.execute(q, {
+                    'table_name': request.url.path,
+                    'op': request.method,
+                    'user': 'admin',
+                    'payload': payload_text
+                })
+        except Exception:
+            logger.exception('Failed to write audit log')
+
+    return response
+
 @app.get("/models/status")
 async def get_model_status():
     """Return champion/challenger status and metrics"""
@@ -80,10 +158,7 @@ async def get_model_status():
 @app.post("/models/retrain")
 async def retrain_model(request: Request, epochs: int = 5):
     """Trigger an asynchronous retrain job. Returns job id."""
-    # simple admin token protection
-    token = request.headers.get('x-admin-token')
-    if not token or token != Config.ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    _require_admin(request)
     job_id = model_registry.trigger_retrain(epochs=epochs)
     return {"job_id": job_id, "status": "started"}
 
@@ -95,9 +170,7 @@ async def list_checkpoints():
 
 @app.post('/models/checkpoint')
 async def save_checkpoint(request: Request):
-    token = request.headers.get('x-admin-token')
-    if not token or token != Config.ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail='Unauthorized')
+    _require_admin(request)
     body = await request.json()
     model_name = body.get('model_name')
     metrics = body.get('metrics', {})
@@ -107,9 +180,7 @@ async def save_checkpoint(request: Request):
 
 @app.post('/models/backtest')
 async def models_backtest(request: Request):
-    token = request.headers.get('x-admin-token')
-    if not token or token != Config.ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail='Unauthorized')
+    _require_admin(request)
     body = await request.json()
     model_name = body.get('model_name')
     start_date = body.get('start_date') or '2023-01-01'
@@ -124,9 +195,7 @@ async def promote_model(request: Request):
     If require_backtest is true, run backtest on the challenger and only promote if
     the net_return_pct meets `Config.PROMOTE_MIN_NET_RETURN`.
     """
-    token = request.headers.get('x-admin-token')
-    if not token or token != Config.ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    _require_admin(request)
     body = await request.json()
     require_backtest = bool(body.get('require_backtest', False))
     start_date = body.get('start_date') or Config.BACKTEST_START_DATE
@@ -137,18 +206,56 @@ async def promote_model(request: Request):
         challenger = status.get('challenger')
         if not challenger:
             return {"promoted": False, "reason": "no_challenger_present"}
-            metrics = run_backtest(challenger, start_date, end_date)
-            net = metrics.get('net_return_pct')
-            trades = int(metrics.get('trades', 0)) if metrics.get('trades') is not None else 0
-            if net is None:
-                return {'promoted': False, 'reason': 'backtest_failed', 'metrics': metrics}
-            if trades < int(Config.PROMOTE_MIN_TRADES):
-                return {'promoted': False, 'reason': 'insufficient_trades', 'metrics': metrics}
-            if float(net) < float(Config.PROMOTE_MIN_NET_RETURN):
-                return {'promoted': False, 'reason': 'insufficient_performance', 'metrics': metrics}
+        # Run backtest on the challenger and evaluate metrics
+        metrics = run_backtest(challenger, start_date, end_date)
+        net = metrics.get('net_return_pct')
+        trades = int(metrics.get('trades', 0)) if metrics.get('trades') is not None else 0
+        if net is None:
+            return {'promoted': False, 'reason': 'backtest_failed', 'metrics': metrics}
+        if trades < int(Config.PROMOTE_MIN_TRADES):
+            return {'promoted': False, 'reason': 'insufficient_trades', 'metrics': metrics}
+        if float(net) < float(Config.PROMOTE_MIN_NET_RETURN):
+            return {'promoted': False, 'reason': 'insufficient_performance', 'metrics': metrics}
 
     ok = model_registry.promote_challenger()
     return {"promoted": ok}
+
+
+@app.post('/models/apply_checkpoint')
+async def apply_checkpoint(request: Request):
+    """Apply a saved checkpoint as the current challenger.
+
+    Body: { "name": "checkpoint_name" }
+    Protected by admin token.
+    """
+    _require_admin(request)
+    body = await request.json()
+    name = body.get('name')
+    if not name:
+        raise HTTPException(status_code=400, detail='name required')
+
+    chk = retrain_manager.load_checkpoint(name)
+    if not chk:
+        return {'applied': False, 'reason': 'not_found'}
+
+    # Set as challenger in registry
+    try:
+        with model_registry._lock:
+            model_registry.challenger = chk.get('model_name') or f"checkpoint_{name}"
+            model_registry.challenger_metrics = chk.get('metrics', {})
+            model_registry.challenger_checkpoint = name
+    except Exception:
+        raise HTTPException(status_code=500, detail='failed_to_apply')
+
+    # Best-effort persist to DB
+    try:
+        with model_registry._lock:
+            with model_registry:
+                pass
+    except Exception:
+        pass
+
+    return {'applied': True, 'name': name}
 
 # Add CORS middleware
 app.add_middleware(
@@ -163,6 +270,7 @@ app.add_middleware(
 app.include_router(screener_router)
 app.include_router(runtime_router)
 app.include_router(xai_router)
+app.include_router(audit_router)
 
 
 
@@ -171,11 +279,44 @@ app.include_router(xai_router)
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
+    health = {
         "status": "healthy",
         "version": "2.0.0",
-        "service": "dellmology-api"
+        "service": "dellmology-api",
+        "database": None,
+        "s3": None
     }
+    try:
+        dbh = get_db_health()
+        health['database'] = dbh
+        if not dbh.get('connected'):
+            health['status'] = 'degraded'
+    except Exception:
+        health['database'] = {'connected': False}
+        health['status'] = 'degraded'
+
+    # Check S3/MinIO if configured
+    try:
+        bucket = os.getenv('AWS_S3_BUCKET') or os.getenv('S3_BUCKET')
+        access = os.getenv('AWS_ACCESS_KEY_ID')
+        secret = os.getenv('AWS_SECRET_ACCESS_KEY')
+        endpoint = os.getenv('S3_ENDPOINT')
+        if boto3 and access and secret and bucket:
+            session = boto3.session.Session()
+            s3 = session.client('s3', aws_access_key_id=access, aws_secret_access_key=secret, endpoint_url=endpoint)
+            try:
+                s3.head_bucket(Bucket=bucket)
+                health['s3'] = {'bucket': bucket, 'accessible': True}
+            except Exception:
+                health['s3'] = {'bucket': bucket, 'accessible': False}
+                health['status'] = 'degraded'
+        else:
+            health['s3'] = {'configured': False}
+    except Exception:
+        health['s3'] = {'accessible': False}
+        health['status'] = 'degraded'
+
+    return health
 
 
 @app.get("/config")
@@ -187,6 +328,54 @@ async def get_config_endpoint():
         if key in config:
             config[key] = '***' if config[key] else None
     return config
+
+
+@app.post('/ups')
+async def ups_event(request: Request):
+    """Receive lightweight UPS/heartbeat/status events from services or webhooks.
+    Body: { source: str, type: str, payload: dict }
+    Saves events to `logs/ups_events.jsonl`.
+    """
+    body = await request.json()
+    source = body.get('source', 'unknown')
+    ev_type = body.get('type', 'event')
+    payload = body.get('payload', {})
+
+    logs_dir = Path(__file__).parent / 'logs'
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    out_file = logs_dir / 'ups_events.jsonl'
+
+    entry = {
+        'ts': datetime.utcnow().isoformat() + 'Z',
+        'source': source,
+        'type': ev_type,
+        'payload': payload
+    }
+    try:
+        with out_file.open('a', encoding='utf-8') as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    except Exception:
+        logger.exception('Failed to write UPS event')
+        raise HTTPException(status_code=500, detail='failed_to_record')
+
+    return {'recorded': True}
+
+
+@app.get('/ups')
+async def list_ups(limit: int = 50):
+    """Return last N UPS events from the local logfile."""
+    logs_dir = Path(__file__).parent / 'logs'
+    out_file = logs_dir / 'ups_events.jsonl'
+    if not out_file.exists():
+        return {'events': []}
+    try:
+        with out_file.open('r', encoding='utf-8') as fh:
+            lines = fh.read().splitlines()[-limit:]
+            events = [json.loads(l) for l in lines if l.strip()]
+        return {'events': events}
+    except Exception:
+        logger.exception('Failed to read UPS events')
+        raise HTTPException(status_code=500, detail='failed_to_read')
 
 
 if __name__ == "__main__":

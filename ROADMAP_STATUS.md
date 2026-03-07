@@ -59,4 +59,10 @@ Recent next steps (recommended):
 - Continue hardening remaining `db/init/*.sql` files for idempotency and Timescale-specific constraints (materialized views, hypertable unique-index rules).
 - Verify S3 checkpoint uploads end-to-end when `AWS_S3_BUCKET` and credentials are available.
 
+Update (2026-03-07):
+- Ran the `apps/ml-engine` unit tests locally — all `apps/ml-engine` tests passed in this run.
+- Added a short plan to introduce an RLS skeleton and audit-trigger migrations; next step is to implement these migrations and a small API for audit log management.
+
+Next actions taken (planned): implement RLS skeleton and audit triggers, then update migrations and docs. Run the local integration (TimescaleDB + MinIO) after migrations.
+
 If kamu setuju, saya bisa lanjut: 1) mengaktifkan Supabase persistence ketika kredensial tersedia, 2) menambahkan RLS skeleton and audit logging, atau 3) lanjut implementasi fitur roadmap berikutnya yang kamu minta. Pilih nomor atau beri instruksi.

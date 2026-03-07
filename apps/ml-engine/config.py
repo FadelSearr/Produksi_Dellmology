@@ -50,6 +50,13 @@ class Config:
 
     # Admin token for protecting sensitive endpoints (set in environment)
     ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '')
+
+    # Supabase / Supabase-compatible persistence (optional)
+    # Provide SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to enable Supabase-specific
+    # migrations or to use Supabase client features. These are optional for local
+    # development but required to enable Supabase persistence features.
+    SUPABASE_URL = os.getenv('SUPABASE_URL', '')
+    SUPABASE_SERVICE_ROLE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')
     
     # Feature Settings
     LOOKBACK_PERIOD = int(os.getenv('LOOKBACK_PERIOD', 60))  # Minutes
