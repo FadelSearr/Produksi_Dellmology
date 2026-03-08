@@ -53,6 +53,32 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
     scheduler.add_job(lambda: broker_flow_main(), 'cron', hour=18, minute=0, id='broker_flow')
     scheduler.add_job(lambda: exit_whale_main(), 'cron', hour=18, minute=15, id='exit_whale')
+    # Daily champion/challenger evaluation and auto-promote (after market close)
+    def _auto_promote_job():
+        try:
+            logger.info('Running scheduled champion/challenger evaluation')
+            status = model_registry.get_status()
+            challenger = status.get('challenger')
+            if not challenger:
+                logger.info('No challenger present, skipping auto-promote')
+                return
+            # run backtest for challenger
+            from dellmology.backtest.backtest_runner import run_backtest
+            start = Config.BACKTEST_START_DATE
+            end = Config.BACKTEST_END_DATE
+            metrics = run_backtest(challenger, start, end)
+            trades = int(metrics.get('trades', 0) or 0)
+            net = metrics.get('net_return_pct')
+            logger.info(f'Challenger backtest metrics: trades={trades} net={net}')
+            if trades >= int(Config.PROMOTE_MIN_TRADES) and net is not None and float(net) >= float(Config.PROMOTE_MIN_NET_RETURN):
+                ok = model_registry.promote_challenger()
+                logger.info(f'Auto-promote result: {ok}')
+            else:
+                logger.info('Challenger did not meet promotion thresholds')
+        except Exception:
+            logger.exception('Auto-promote job failed')
+
+    scheduler.add_job(_auto_promote_job, 'cron', hour=19, minute=0, id='auto_promote')
     scheduler.start()
     logger.info("Scheduled broker flow job (18:00 daily)")
     logger.info("Scheduled exit whale detection job (18:15 daily)")
@@ -138,6 +164,14 @@ async def audit_middleware(request: Request, call_next):
             if len(payload_text) > 4000:
                 payload_text = payload_text[:4000] + '...'
             with get_db_connection() as conn:
+                # If running against Supabase with RLS, set a session var so
+                # service-role/admin operations can be recognized by DB policies.
+                try:
+                    conn.execute(text("SELECT set_config('dellmology.is_service_role','true', true)"))
+                except Exception:
+                    # Ignore if DB does not allow set_config or variable not defined
+                    pass
+
                 q = text("INSERT INTO public.ml_audit_log (table_name, operation, changed_by, payload) VALUES (:table_name, :op, :user, :payload)")
                 conn.execute(q, {
                     'table_name': request.url.path,
