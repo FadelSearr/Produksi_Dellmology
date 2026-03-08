@@ -32,7 +32,7 @@ from dellmology.api.maintenance_api import router as maintenance_router
 from broker_flow import main as broker_flow_main
 from exit_whale import main as exit_whale_main
 from apscheduler.schedulers.background import BackgroundScheduler
-from dellmology.utils.model_retrain_scheduler import schedule_retraining
+from dellmology.utils.model_retrain_scheduler import start_scheduler, get_status, reschedule
 from dellmology.utils.db_utils import init_db, get_db_connection, get_db_health
 try:
     import boto3
@@ -92,7 +92,8 @@ async def lifespan(app: FastAPI):
 
     # Schedule automated model retraining (default: weekdays 17:00)
     try:
-        schedule_retraining(lambda: model_registry.trigger_retrain(epochs=5))
+        # Start retraining scheduler with default cron (5pm weekdays)
+        start_scheduler(lambda epochs=5: model_registry.trigger_retrain(epochs=epochs))
         logger.info("Model retraining scheduler initialized")
     except Exception:
         logger.exception("Failed to initialize model retraining scheduler")

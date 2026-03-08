@@ -105,3 +105,33 @@ def refresh_continuous_aggregates(view: str | None = None):
     except Exception as e:
         logger.exception('Failed refresh_continuous_aggregates')
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get('/retrain-status')
+def retrain_status():
+    """Return current retrain scheduler status."""
+    try:
+        from dellmology.utils.model_retrain_scheduler import get_status
+        return get_status()
+    except Exception as e:
+        logger.exception('Failed to get retrain status')
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post('/retrain-schedule')
+def retrain_schedule(body: dict):
+    """Update retrain schedule.
+
+    Body: { "cron": "<min hour day month dow>", "epochs": 5 }
+    """
+    cron = body.get('cron')
+    epochs = int(body.get('epochs', 5))
+    if not cron:
+        raise HTTPException(status_code=400, detail='cron required')
+    try:
+        from dellmology.utils.model_retrain_scheduler import reschedule
+        reschedule(cron, epochs=epochs)
+        return {'updated': True, 'cron': cron}
+    except Exception as e:
+        logger.exception('Failed to update retrain schedule')
+        raise HTTPException(status_code=500, detail=str(e))
