@@ -11,6 +11,7 @@ Pending validation:
 - Local migration readiness still requires Docker daemon availability for full end-to-end checks.
  - PR #2 opened: https://github.com/FadelSearr/Dellmology-pro/pull/2 — TimescaleDB E2E and related CI runs are currently in progress.
  - Update (2026-03-08): PR #2 was merged into `main` after TimescaleDB E2E passed (run ID 22815652423). CI validated migrations, RLS policies, and supabase-marked tests.
+ - Added `.env.example` documenting `ML_ENGINE_KEY` and `ADMIN_JWKS_*` settings, created `docs/JWKS_ML_ENGINE_KEY.md`, and updated frontend proxy routes to prefer incoming `Authorization: Bearer <token>` and fall back to `ML_ENGINE_KEY` for local/dev server-to-server calls. Changes committed and pushed to the repo.
 # ROADMAP Implementation Status
 
 Ringkasan status implementasi roadmap terhadap kode yang ada di repository saat ini (per 2026-03-08).
