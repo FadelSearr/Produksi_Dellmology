@@ -120,3 +120,13 @@ Recommendations: merge verification branch (`ci/trigger-e2e`) into `main` when r
 Recent addition (evaluation persistence):
 - **Persist evaluations:** Scheduled evaluations now persist results to `public.ml_model_evaluations` (best-effort; table optional) when available.
 - **UPS event:** Each evaluation writes a UPS event to `apps/ml-engine/logs/ups_events.jsonl` so downstream notifiers (UPS/Telegram) can pick up evaluation outcomes.
+ 
+Release & CI updates (2026-03-08):
+- Created release PR branch `release/v2.0.0` with `RELEASE_PR.md` summarizing v2.0.0 changes.
+- Draft GitHub Release created from tag `v2.0.0` (review link printed in CI logs).
+- Added Telegram notifier and test scripts (`apps/ml-engine/scripts/send_telegram_test.py`, `apps/ml-engine/scripts/test_evaluate_notify.py`).
+- Added GitHub Actions workflows for on-demand tests:
+	- `.github/workflows/telegram-e2e.yml` — manual Telegram test (requires `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` secrets).
+	- `.github/workflows/evaluate-promote-e2e.yml` — manual evaluate/promote E2E against `ML_ENGINE_URL` (requires `ML_ENGINE_KEY` or `ADMIN_TOKEN`).
+
+These additions enable safe, manual verification of notification paths and evaluate/promote orchestration in CI while keeping production secrets out of the repository.
