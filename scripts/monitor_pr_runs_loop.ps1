@@ -1,6 +1,6 @@
 param(
     [int]$PrNumber = 11,
-    [int]$IntervalSeconds = 300,
+    [int]$IntervalSeconds = 3600,
     [int]$Limit = 50
 )
 
