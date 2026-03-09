@@ -36,15 +36,10 @@ $madeChanges = $false
 
 foreach ($f in $failedFiles) {
     $text = Get-Content $f.FullName -Raw -ErrorAction SilentlyContinue
-    if ($text -match "No module named 'apps'" -or $text -match "No module named \"apps\"") {
+    if ($text -match 'No module named.*apps') {
         Write-Output "Detected missing 'apps' package error in $($f.FullName)"
         $target = Join-Path $RepoRoot "apps\ml_engine\__init__.py"
-        $content = @'
-import os
-
-# Compatibility package pointing to the hyphenated folder `apps/ml-engine`.
-__path__ = [os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'ml-engine'))]
-@'
+        $content = "import os`n`n# Compatibility package pointing to the hyphenated folder apps/ml-engine.`n__path__ = [os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'ml-engine'))]"
         if (New-FileIfMissing -Path $target -Content $content) {
             Write-Output "Created $target"
             $madeChanges = $true
@@ -63,8 +58,8 @@ if ($madeChanges) {
     try {
         git checkout $Branch
         git add -A
-        git commit -m "fix(ci): add compatibility package apps.ml_engine to resolve import errors from tests" || Write-Output "Nothing to commit or commit failed"
-        git push origin $Branch
+        git commit -m "fix(ci): add compatibility package apps.ml_engine to resolve import errors from tests" 2>$null
+        if ($LASTEXITCODE -ne 0) { Write-Output "Nothing to commit or commit failed" } else { git push origin $Branch }
         Write-Output "Pushed fixes to $Branch"
     } catch {
         Write-Error "Error committing/pushing fixes: $_"
