@@ -38,3 +38,19 @@ jobs:
         uses: actions/checkout@v4
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/monitor_pr_runs.ps1 -PrNumber ${{ github.event.inputs.pr_number || '11' }}
+
+      - name: Package pr-logs (if any)
+        run: |
+          if [ -d pr-logs ]; then
+            tar -czf pr-logs.tar.gz pr-logs
+            echo "Packaged pr-logs.tar.gz"
+          else
+            echo "No pr-logs directory present"
+          fi
+
+      - name: Upload pr-logs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-logs-${{ github.run_id }}
+          path: pr-logs.tar.gz
