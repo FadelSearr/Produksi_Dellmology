@@ -28,7 +28,8 @@ try {
         # Ensure chat id is a string (Telegram accepts numeric IDs as strings too)
         $chat = [string]$chat
 
-        $url = "${env:TELEGRAM_API_BASE:-https://api.telegram.org}/bot$token/sendMessage"
+        $apiBase = if ($env:TELEGRAM_API_BASE) { $env:TELEGRAM_API_BASE } else { 'https://api.telegram.org' }
+        $url = "$apiBase/bot$token/sendMessage"
         $payload = @{ chat_id = $chat; text = $Message } | ConvertTo-Json -Compress
         try {
             Invoke-RestMethod -Method Post -Uri $url -Body $payload -ContentType 'application/json'
