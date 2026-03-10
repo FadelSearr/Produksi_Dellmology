@@ -13,6 +13,8 @@ import os
 import sys
 import logging
 import uuid
+import shlex
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -100,6 +102,11 @@ def main(argv=None):
     whitelist = set(cfg.get('whitelist', []) or [])
     blacklist = set(cfg.get('blacklist', []) or [])
 
+    # Global safety flags from config and environment
+    global_allow_auto_commit = bool(cfg.get('allow_auto_commit', False))
+    env_allow_auto_commit = os.environ.get('AUTO_PROMPTS_ALLOW_COMMIT', '').lower() == 'true'
+    env_allow_push = os.environ.get('AUTO_PROMPTS_ALLOW_PUSH', '').lower() == 'true'
+
     agent: AgentInterface = LocalAgent()
 
     for hook in hooks:
@@ -143,15 +150,46 @@ def main(argv=None):
             marker.write_text(datetime.utcnow().isoformat())
 
         if result.would_commit or hook.get('requires_confirmation_for_commits'):
-            # Do not auto-commit. Save patch placeholder and log, with clear confirm instructions.
+            # If auto-commit is requested for this hook and globally allowed + env enabled, attempt commit
+            auto_commit_requested = bool(hook.get('auto_commit', False))
+            auto_push_requested = bool(hook.get('auto_push', False))
+
             pending_dir = Path('.github/auto-prompts-pending')
             pending_dir.mkdir(parents=True, exist_ok=True)
             pending_file = pending_dir / f"{name}.txt"
             with pending_file.open('w', encoding='utf-8') as pf:
-                pf.write(f"Hook: {name}\nPrompt: {prompt}\n\nAgent output:\n{result.output}\n\nChanged files: {result.changed_files}\n\n" )
-                pf.write("To apply these changes, review them and run: git add <files> && git commit -m \"auto-prompt: apply <hook>\"\n")
-            log_entry(f"HOOK:{name} PENDING_CHANGE: {pending_file}")
-            print(f"Hook {name} produced changes. Saved pending file: {pending_file}. Commit requires manual confirmation.")
+                pf.write(f"Hook: {name}\nPrompt: {prompt}\n\nAgent output:\n{result.output}\n\nChanged files: {result.changed_files}\n\n")
+
+            committed = False
+            if auto_commit_requested and global_allow_auto_commit and env_allow_auto_commit and result.changed_files:
+                msg = f"auto-prompt: apply {name}"
+                try:
+                    # git add
+                    add_cmd = ['git', 'add'] + list(result.changed_files)
+                    subprocess.run(add_cmd, check=True)
+                    # git commit
+                    commit_cmd = ['git', 'commit', '-m', msg]
+                    subprocess.run(commit_cmd, check=True)
+                    committed = True
+                    log_entry(f"HOOK:{name} AUTO_COMMIT_APPLIED message={msg}")
+                    print(f"Hook {name}: auto-commit succeeded.")
+                    # optional push
+                    if auto_push_requested and env_allow_push:
+                        push_cmd = ['git', 'push']
+                        subprocess.run(push_cmd, check=True)
+                        log_entry(f"HOOK:{name} AUTO_PUSH_DONE")
+                except Exception as e:
+                    log_entry(f"HOOK:{name} AUTO_COMMIT_FAILED: {e}")
+                    print(f"Auto-commit failed for hook {name}: {e}")
+
+            # If not committed, leave pending file and instructions
+            if not committed:
+                with pending_file.open('a', encoding='utf-8') as pf:
+                    pf.write("To apply these changes manually:\n")
+                    pf.write("  git add <files>\n")
+                    pf.write(f"  git commit -m \"auto-prompt: apply {name}\"\n")
+                log_entry(f"HOOK:{name} PENDING_CHANGE: {pending_file}")
+                print(f"Hook {name} produced changes. Saved pending file: {pending_file}. Commit requires manual confirmation or enable AUTO_PROMPTS_ALLOW_COMMIT=true and allow_auto_commit in config.")
         else:
             print(f"Hook {name} completed with no commit-worthy changes.")
 
