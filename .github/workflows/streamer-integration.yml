@@ -1,0 +1,69 @@
+name: Streamer Integration Tests
+
+on:
+  pull_request:
+    paths:
+      - 'apps/streamer/**'
+      - 'db/init/**'
+  push:
+    paths:
+      - 'apps/streamer/**'
+      - 'db/init/**'
+
+jobs:
+  integration:
+    name: Integration tests (TimescaleDB)
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: timescale/timescaledb:2.11.0-pg14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dellmology
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dellmology"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wait for DB and install psql client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U postgres -d dellmology; then
+              echo "DB ready"; break
+            fi
+            sleep 2
+          done
+
+      - name: Apply SQL migrations
+        env:
+          PGPASSWORD: postgres
+        run: |
+          echo "Applying migrations from db/init"
+          for f in db/init/*.sql; do
+            echo "---- $f ----"
+            psql -h localhost -U postgres -d dellmology -f "$f"
+          done
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.20'
+
+      - name: Run streamer tests
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/dellmology?sslmode=disable
+        run: |
+          cd apps/streamer
+          go env
+          go mod download
+          go test ./... -v
