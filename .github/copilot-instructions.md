@@ -43,7 +43,7 @@ Prompt Chaining (Auto-Prompt Hooks)
   hooks:
     - name: "roadmap-check"
       trigger: "on_completion"
-      prompt: "Lakukan pengecekan status roadmap dan ringkas perubahan terbaru dalam 5 poin."
+      prompt: "lanjutkan berdasarkan roadmap."
       run_once_per_invocation: true
   ```
 - Safety rules:

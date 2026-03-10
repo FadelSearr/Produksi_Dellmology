@@ -11,6 +11,8 @@ on:
 jobs:
   ml-smoke:
     runs-on: ubuntu-latest
+    env:
+      ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python

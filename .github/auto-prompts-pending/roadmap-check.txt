@@ -1,0 +1,10 @@
+Hook: roadmap-check
+Prompt: Lanjutkan sesuai roadmap
+
+Agent output:
+[LocalAgent] Executed prompt: Lanjutkan sesuai roadmap
+
+
+Changed files: []
+
+To apply these changes, review them and run: git add <files> && git commit -m "auto-prompt: apply <hook>"
