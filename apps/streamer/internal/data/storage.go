@@ -5,12 +5,55 @@ import (
 	"database/sql"
 	"log"
 	"math"
+	"math/rand"
+	"os"
 	"time"
 
 	_ "github.com/lib/pq"
 )
 
 var db *sql.DB
+
+func init() {
+	// seed jitter for backoff
+	rand.Seed(time.Now().UnixNano())
+}
+
+// ensureDB attempts to verify the DB connection and re-open using
+// the provided DATABASE_URL env var if necessary. Non-fatal; callers
+// will continue retrying their operations.
+func ensureDB() {
+	if db != nil {
+		if err := db.Ping(); err == nil {
+			return
+		}
+	}
+	// try to re-open using env var if available
+	if url := lookupDatabaseURL(); url != "" {
+		d, err := sql.Open("postgres", url)
+		if err == nil {
+			d.SetMaxOpenConns(25)
+			d.SetMaxIdleConns(5)
+			d.SetConnMaxLifetime(30 * time.Minute)
+			if err = d.Ping(); err == nil {
+				db = d
+				log.Println("Reconnected to database via ensureDB")
+				return
+			}
+			// close on failure
+			_ = d.Close()
+		}
+	}
+}
+
+func lookupDatabaseURL() string {
+	// try common env vars
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		return v
+	}
+	return ""
+}
+
 
 // InitDB initializes database connection
 func InitDB(databaseURL string) error {
@@ -45,7 +88,14 @@ func StoreRawTrade(symbol string, price float64, volume int64, tradeType string)
 	maxAttempts := 5
 	baseDelay := 100 * time.Millisecond
 
+	// Ensure DB is available before attempts
+	ensureDB()
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if db == nil {
+			ensureDB()
+			// small sleep before retrying open
+			time.Sleep(50 * time.Millisecond)
+		}
 		_, err = db.Exec(query, symbol, price, volume, tradeType)
 		if err == nil {
 			return nil
@@ -59,6 +109,8 @@ func StoreRawTrade(symbol string, price float64, volume int64, tradeType string)
 
 		// Calculate backoff with jitter
 		backoff := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+		// Add jitter up to 100ms
+		backoff = backoff + time.Duration(rand.Int63n(100))*time.Millisecond
 		// Cap the backoff to 5 seconds
 		if backoff > 5*time.Second {
 			backoff = 5 * time.Second
@@ -80,7 +132,13 @@ func StoreQuoteData(symbol string, bid, offer float64, lastPrice float64) error 
 	maxAttempts := 5
 	baseDelay := 100 * time.Millisecond
 
+	// Ensure DB is available before attempts
+	ensureDB()
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if db == nil {
+			ensureDB()
+			time.Sleep(50 * time.Millisecond)
+		}
 		_, err = db.Exec(query, symbol, bid, offer, lastPrice)
 		if err == nil {
 			return nil
@@ -92,6 +150,7 @@ func StoreQuoteData(symbol string, bid, offer float64, lastPrice float64) error 
 		}
 
 		backoff := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+		backoff = backoff + time.Duration(rand.Int63n(100))*time.Millisecond
 		if backoff > 5*time.Second {
 			backoff = 5 * time.Second
 		}
