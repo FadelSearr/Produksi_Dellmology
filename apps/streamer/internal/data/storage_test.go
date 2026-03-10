@@ -53,3 +53,46 @@ func TestStoreRawTrade_AllAttemptsFail(t *testing.T) {
 		t.Fatalf("unmet expectations: %v", err)
 	}
 }
+
+func TestStoreQuoteData_RetrySucceeds(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	db = mockDB
+
+	mock.ExpectExec("INSERT INTO order_book_updates").WillReturnError(sqlmock.ErrCancelled)
+	mock.ExpectExec("INSERT INTO order_book_updates").WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err = StoreQuoteData("TESTQ", 1.1, 1.2, 1.15)
+	if err != nil {
+		t.Fatalf("expected nil error after retry, got: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestStoreQuoteData_AllAttemptsFail(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to open sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	db = mockDB
+
+	for i := 0; i < 5; i++ {
+		mock.ExpectExec("INSERT INTO order_book_updates").WillReturnError(sqlmock.ErrCancelled)
+	}
+
+	err = StoreQuoteData("FAILQ", 0.0, 0.0, 0.0)
+	if err == nil {
+		t.Fatalf("expected error after all retries fail, got nil")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}

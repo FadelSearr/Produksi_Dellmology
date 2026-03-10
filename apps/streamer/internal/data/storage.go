@@ -17,7 +17,7 @@ func InitDB(databaseURL string) error {
 	var err error
 	db, err = sql.Open("postgres", databaseURL)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		log.Printf("Failed to open database: %v", err)
 		return err
 	}
 	// Connection pool tuning
@@ -26,7 +26,7 @@ func InitDB(databaseURL string) error {
 	db.SetConnMaxLifetime(30 * time.Minute)
 
 	if err = db.Ping(); err != nil {
-		log.Fatalf("Failed to ping database: %v", err)
+		log.Printf("Failed to ping database: %v", err)
 		return err
 	}
 
@@ -75,9 +75,27 @@ func StoreQuoteData(symbol string, bid, offer float64, lastPrice float64) error 
 		INSERT INTO order_book_updates (symbol, bid, offer, last_price, timestamp)
 		VALUES ($1, $2, $3, $4, NOW())
 	`
-	_, err := db.Exec(query, symbol, bid, offer, lastPrice)
-	if err != nil {
-		log.Printf("Error storing quote: %v", err)
+	var err error
+	// Exponential backoff retry for quote storage as well
+	maxAttempts := 5
+	baseDelay := 100 * time.Millisecond
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		_, err = db.Exec(query, symbol, bid, offer, lastPrice)
+		if err == nil {
+			return nil
+		}
+
+		if attempt == maxAttempts {
+			log.Printf("Error storing quote after %d attempts: %v", attempt, err)
+			break
+		}
+
+		backoff := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+		if backoff > 5*time.Second {
+			backoff = 5 * time.Second
+		}
+		time.Sleep(backoff)
 	}
 	return err
 }
