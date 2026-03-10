@@ -373,3 +373,43 @@ def save_signal_snapshot(snapshot: Dict, signal_type: str = "BUY", table: str = 
     except Exception as e:
         logger.error(f"Error saving signal snapshot: {e}")
         return False
+
+
+def save_model_metrics(metrics: Dict) -> bool:
+    """
+    Persist arbitrary model/backtest metrics into `model_metrics_jsonb` table.
+    Expects a dict containing at least a `model_name` or `name` key.
+    """
+    import json
+    # First, attempt to send metrics to Supabase if configured. This is
+    # optional and non-fatal; if Supabase is not configured or fails,
+    # continue to persist locally in Postgres.
+    try:
+        from dellmology.utils.supabase_client import get_client
+        client = get_client()
+        if client:
+            try:
+                # Supabase expects a dict/JSON insert
+                res = client.table('model_metrics_jsonb').insert({
+                    'name': metrics.get('model_name') or metrics.get('name') or 'unnamed',
+                    'metrics': metrics,
+                }).execute()
+                logger.info('Saved model metrics to Supabase')
+            except Exception:
+                logger.exception('Failed to save model metrics to Supabase; will fallback to DB')
+    except Exception:
+        # If supabase_client import fails or not configured, ignore silently
+        pass
+
+    try:
+        with get_db_connection() as conn:
+            name = metrics.get('model_name') or metrics.get('name') or 'unnamed'
+            q = text("INSERT INTO model_metrics_jsonb (name, metrics) VALUES (:name, :metrics)")
+            conn.execute(q, {
+                'name': name,
+                'metrics': json.dumps(metrics)
+            })
+        return True
+    except Exception as e:
+        logger.error(f"Error saving model metrics to DB: {e}")
+        return False

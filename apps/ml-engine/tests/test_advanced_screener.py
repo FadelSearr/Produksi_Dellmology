@@ -41,6 +41,9 @@ def test_api_screen_endpoint():
     # import the main app defined in ml-engine
     from main import app as ml_app
 
+    # Create TestClient. `main` detects pytest in sys.modules and skips
+    # starting background schedulers during test collection, so no extra
+    # lifespan control is required here.
     client = TestClient(ml_app)
     payload = {"mode": "DAYTRADE", "min_score": 0.0}
     response = client.post("/api/screen", json=payload)

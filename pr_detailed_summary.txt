@@ -1,0 +1,31 @@
+﻿Detailed PR logs summary
+Generated: 2026-03-10 04:28:23Z
+
+Run folder: 22875361818
+  Files: 1
+  - C:\IDX_Analyst\pr-logs-artifacts-22875372029\extracted\pr-logs\22875361818\model_metrics\model_metrics.json (141 bytes)
+    First lines:
+      {
+        "timestamp": "2026-03-09T21:21:52.797280Z",
+        "samples": 16,
+        "input_shape": [
+          16,
+          16,
+          1
+        ],
+        "avg_top1_confidence": 0.5
+      }
+    Last lines:
+      {
+        "timestamp": "2026-03-09T21:21:52.797280Z",
+        "samples": 16,
+        "input_shape": [
+          16,
+          16,
+          1
+        ],
+        "avg_top1_confidence": 0.5
+      }
+    No explicit error/exception/failed matches found in file.
+
+

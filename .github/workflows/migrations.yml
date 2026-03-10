@@ -43,6 +43,9 @@ jobs:
       - name: Run migrations
         env:
           DATABASE_URL: postgresql://admin:password@localhost:5432/dellmology
+          # Provide placeholder Supabase values so Supabase-only migrations run
+          SUPABASE_URL: "http://localhost"
+          SUPABASE_SERVICE_ROLE_KEY: "dummy_service_role"
         run: |
           python apps/ml-engine/scripts/run_migrations.py
 

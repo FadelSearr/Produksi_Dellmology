@@ -4,23 +4,72 @@ package data
 import (
 	"database/sql"
 	"log"
+	"math"
+	"math/rand"
+	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 )
 
 var db *sql.DB
 
+func init() {
+	// seed jitter for backoff
+	rand.Seed(time.Now().UnixNano())
+}
+
+// ensureDB attempts to verify the DB connection and re-open using
+// the provided DATABASE_URL env var if necessary. Non-fatal; callers
+// will continue retrying their operations.
+func ensureDB() {
+	if db != nil {
+		if err := db.Ping(); err == nil {
+			return
+		}
+	}
+	// try to re-open using env var if available
+	if url := lookupDatabaseURL(); url != "" {
+		d, err := sql.Open("postgres", url)
+		if err == nil {
+			d.SetMaxOpenConns(25)
+			d.SetMaxIdleConns(5)
+			d.SetConnMaxLifetime(30 * time.Minute)
+			if err = d.Ping(); err == nil {
+				db = d
+				log.Println("Reconnected to database via ensureDB")
+				return
+			}
+			// close on failure
+			_ = d.Close()
+		}
+	}
+}
+
+func lookupDatabaseURL() string {
+	// try common env vars
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		return v
+	}
+	return ""
+}
+
+
 // InitDB initializes database connection
 func InitDB(databaseURL string) error {
 	var err error
 	db, err = sql.Open("postgres", databaseURL)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		log.Printf("Failed to open database: %v", err)
 		return err
 	}
+	// Connection pool tuning
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
 
 	if err = db.Ping(); err != nil {
-		log.Fatalf("Failed to ping database: %v", err)
+		log.Printf("Failed to ping database: %v", err)
 		return err
 	}
 
@@ -34,10 +83,41 @@ func StoreRawTrade(symbol string, price float64, volume int64, tradeType string)
 		INSERT INTO trades (symbol, price, volume, trade_type, timestamp)
 		VALUES ($1, $2, $3, $4, NOW())
 	`
-	_, err := db.Exec(query, symbol, price, volume, tradeType)
-	if err != nil {
-		log.Printf("Error storing trade: %v", err)
+	var err error
+	// Exponential backoff retry
+	maxAttempts := 5
+	baseDelay := 100 * time.Millisecond
+
+	// Ensure DB is available before attempts
+	ensureDB()
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if db == nil {
+			ensureDB()
+			// small sleep before retrying open
+			time.Sleep(50 * time.Millisecond)
+		}
+		_, err = db.Exec(query, symbol, price, volume, tradeType)
+		if err == nil {
+			return nil
+		}
+
+		// If last attempt, break and return error
+		if attempt == maxAttempts {
+			log.Printf("Error storing trade after %d attempts: %v", attempt, err)
+			break
+		}
+
+		// Calculate backoff with jitter
+		backoff := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+		// Add jitter up to 100ms
+		backoff = backoff + time.Duration(rand.Int63n(100))*time.Millisecond
+		// Cap the backoff to 5 seconds
+		if backoff > 5*time.Second {
+			backoff = 5 * time.Second
+		}
+		time.Sleep(backoff)
 	}
+
 	return err
 }
 
@@ -47,9 +127,34 @@ func StoreQuoteData(symbol string, bid, offer float64, lastPrice float64) error 
 		INSERT INTO order_book_updates (symbol, bid, offer, last_price, timestamp)
 		VALUES ($1, $2, $3, $4, NOW())
 	`
-	_, err := db.Exec(query, symbol, bid, offer, lastPrice)
-	if err != nil {
-		log.Printf("Error storing quote: %v", err)
+	var err error
+	// Exponential backoff retry for quote storage as well
+	maxAttempts := 5
+	baseDelay := 100 * time.Millisecond
+
+	// Ensure DB is available before attempts
+	ensureDB()
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if db == nil {
+			ensureDB()
+			time.Sleep(50 * time.Millisecond)
+		}
+		_, err = db.Exec(query, symbol, bid, offer, lastPrice)
+		if err == nil {
+			return nil
+		}
+
+		if attempt == maxAttempts {
+			log.Printf("Error storing quote after %d attempts: %v", attempt, err)
+			break
+		}
+
+		backoff := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+		backoff = backoff + time.Duration(rand.Int63n(100))*time.Millisecond
+		if backoff > 5*time.Second {
+			backoff = 5 * time.Second
+		}
+		time.Sleep(backoff)
 	}
 	return err
 }
