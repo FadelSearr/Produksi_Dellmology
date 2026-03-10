@@ -66,4 +66,7 @@ jobs:
           cd apps/streamer
           go env
           go mod download
+          # Run unit tests (integration-tagged tests excluded)
           go test ./... -v
+          # Run integration tests (requires DB and `//go:build integration` on files)
+          go test -tags=integration ./... -v
