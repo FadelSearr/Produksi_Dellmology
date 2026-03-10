@@ -33,6 +33,12 @@ def test_models_backtest_endpoint(monkeypatch):
 
     headers = {'x-admin-token': 'testkey'}
     resp = client.post('/models/backtest', json=payload, headers=headers)
+    if resp.status_code != 200:
+        # Emit minimal debug info to CI logs to help triage auth failures
+        print('DEBUG: resp.status_code=', resp.status_code)
+        print('DEBUG: resp.text=', resp.text)
+        print('DEBUG: env.ADMIN_TOKEN=', os.getenv('ADMIN_TOKEN'))
+        print('DEBUG: env.ML_ENGINE_KEY=', os.getenv('ML_ENGINE_KEY'))
     assert resp.status_code == 200
     body = resp.json()
     assert 'backtest' in body

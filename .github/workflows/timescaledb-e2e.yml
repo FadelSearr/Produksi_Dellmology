@@ -45,6 +45,9 @@ jobs:
       - name: Run migrations
         env:
           DATABASE_URL: postgresql://admin:password@localhost:5432/dellmology
+          # Provide placeholder Supabase values so Supabase-only migrations run
+          SUPABASE_URL: "http://localhost"
+          SUPABASE_SERVICE_ROLE_KEY: "dummy_service_role"
         run: |
           echo "Running migrations against TimescaleDB"
           python apps/ml-engine/scripts/run_migrations.py
@@ -52,6 +55,8 @@ jobs:
       - name: Run RLS checker
         env:
           DATABASE_URL: postgresql://admin:password@localhost:5432/dellmology
+          SUPABASE_URL: "http://localhost"
+          SUPABASE_SERVICE_ROLE_KEY: "dummy_service_role"
         run: |
           echo "Running RLS checker"
           python apps/ml-engine/scripts/check_supabase_rls.py || true
@@ -59,6 +64,8 @@ jobs:
       - name: Run supabase-marked tests
         env:
           DATABASE_URL: postgresql://admin:password@localhost:5432/dellmology
+          SUPABASE_URL: "http://localhost"
+          SUPABASE_SERVICE_ROLE_KEY: "dummy_service_role"
         run: |
           echo "Running pytest for tests marked 'supabase'"
           python -m pytest -q -m supabase apps/ml-engine/tests || true
