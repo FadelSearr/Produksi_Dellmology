@@ -44,7 +44,7 @@ try {
         if (Test-Path $dest) {
             $files = Get-ChildItem -Path $dest -Recurse -File -ErrorAction SilentlyContinue
             if ($files) {
-                Write-Output "Files downloaded for run $id:"
+                Write-Output "Files downloaded for run ${id}:"
                 foreach ($f in $files) {
                     Write-Output "  $($f.FullName) - $($f.Length) bytes"
                     if ($f.Length -eq 0) { Write-Warning "Zero-length file: $($f.FullName)" }
@@ -55,6 +55,22 @@ try {
         } else {
             Write-Warning "Download target $dest not created for run $id"
         }
+    }
+
+    # If nothing was downloaded, create a descriptive placeholder so the
+    # workflow artifact is non-empty and contains context for the failure.
+    $allFiles = Get-ChildItem -Path $outDir -Recurse -File -ErrorAction SilentlyContinue
+    if (-not $allFiles) {
+        $ts = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmssZ')
+        $placeholder = Join-Path $outDir ("placeholder-no-logs-$ts.txt")
+        $msg = @()
+        $msg += "No log files were downloaded for PR #$PrNumber on $ts UTC"
+        $msg += "Checked runs (up to $Limit):"
+        foreach ($r in $failed) {
+            $msg += " - id=$($r.databaseId) workflow=$($r.workflowName) conclusion=$($r.conclusion)"
+        }
+        $msg | Out-File -FilePath $placeholder -Encoding utf8
+        Write-Warning "No files downloaded; created placeholder $placeholder"
     }
 
     Write-Output "Download complete. Check the pr-logs/ directory."
