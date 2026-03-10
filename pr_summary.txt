@@ -1,0 +1,16 @@
+﻿Extracted pr-logs summary
+Folders found: 1
+- Folder: 22875361818 â€” files: 1, total_bytes: 141
+    * C:\IDX_Analyst\pr-logs-artifacts-22875372029\extracted\pr-logs\22875361818\model_metrics\model_metrics.json â€” 141 bytes
+    model_metrics.json:
+{
+  "timestamp": "2026-03-09T21:21:52.797280Z",
+  "samples": 16,
+  "input_shape": [
+    16,
+    16,
+    1
+  ],
+  "avg_top1_confidence": 0.5
+}
+

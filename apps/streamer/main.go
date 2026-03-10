@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"context"
+	"math"
 	"os/exec"
 
 	analysispkg "github.com/dellmology/streamer/internal/analysis"
@@ -1116,7 +1117,25 @@ func insertTrade(t ProcessedTrade) error {
 		// running in test or without DB; skip write
 		return nil
 	}
-	_, err := db.Exec(`INSERT INTO trades (symbol, price, volume, trade_type, timestamp) VALUES ($1, $2, $3, $4, $5)`, t.Symbol, t.Price, t.Volume, t.TradeType, t.Timestamp)
+	var err error
+	// retry with exponential backoff
+	maxAttempts := 5
+	baseDelay := 100 * time.Millisecond
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		_, err = db.Exec(`INSERT INTO trades (symbol, price, volume, trade_type, timestamp) VALUES ($1, $2, $3, $4, $5)`, t.Symbol, t.Price, t.Volume, t.TradeType, t.Timestamp)
+		if err == nil {
+			return nil
+		}
+		if attempt == maxAttempts {
+			log.Printf("ERROR: Failed to insert trade after %d attempts: %v", attempt, err)
+			break
+		}
+		backoff := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
+		if backoff > 5*time.Second {
+			backoff = 5 * time.Second
+		}
+		time.Sleep(backoff)
+	}
 	return err
 }
 

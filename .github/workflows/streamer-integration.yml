@@ -11,9 +11,30 @@ on:
       - 'db/init/**'
 
 jobs:
+  unit:
+    name: Streamer unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.20'
+
+      - name: Run unit tests
+        run: |
+          cd apps/streamer
+          go mod download
+          # Run unit tests (integration-tagged tests excluded)
+          go test ./... -v
+
   integration:
     name: Integration tests (TimescaleDB)
     runs-on: ubuntu-latest
+    needs: unit
     services:
       db:
         image: timescale/timescaledb:2.11.0-pg14
@@ -59,14 +80,12 @@ jobs:
         with:
           go-version: '1.20'
 
-      - name: Run streamer tests
+      - name: Run integration tests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/dellmology?sslmode=disable
         run: |
           cd apps/streamer
           go env
           go mod download
-          # Run unit tests (integration-tagged tests excluded)
-          go test ./... -v
           # Run integration tests (requires DB and `//go:build integration` on files)
           go test -tags=integration ./... -v
