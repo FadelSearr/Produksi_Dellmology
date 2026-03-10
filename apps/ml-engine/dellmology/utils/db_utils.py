@@ -381,6 +381,26 @@ def save_model_metrics(metrics: Dict) -> bool:
     Expects a dict containing at least a `model_name` or `name` key.
     """
     import json
+    # First, attempt to send metrics to Supabase if configured. This is
+    # optional and non-fatal; if Supabase is not configured or fails,
+    # continue to persist locally in Postgres.
+    try:
+        from dellmology.utils.supabase_client import get_client
+        client = get_client()
+        if client:
+            try:
+                # Supabase expects a dict/JSON insert
+                res = client.table('model_metrics_jsonb').insert({
+                    'name': metrics.get('model_name') or metrics.get('name') or 'unnamed',
+                    'metrics': metrics,
+                }).execute()
+                logger.info('Saved model metrics to Supabase')
+            except Exception:
+                logger.exception('Failed to save model metrics to Supabase; will fallback to DB')
+    except Exception:
+        # If supabase_client import fails or not configured, ignore silently
+        pass
+
     try:
         with get_db_connection() as conn:
             name = metrics.get('model_name') or metrics.get('name') or 'unnamed'
@@ -391,5 +411,5 @@ def save_model_metrics(metrics: Dict) -> bool:
             })
         return True
     except Exception as e:
-        logger.error(f"Error saving model metrics: {e}")
+        logger.error(f"Error saving model metrics to DB: {e}")
         return False
