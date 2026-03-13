@@ -70,3 +70,6 @@ runs/
 
 # OS-specific temp
 *.tar.gz
+
+# Local scripts state
+.scripts/.seen_runs.json
