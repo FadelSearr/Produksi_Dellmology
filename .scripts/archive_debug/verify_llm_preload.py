@@ -5,7 +5,7 @@ import sys
 import os
 
 # Ensure ml-engine package is importable
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'apps', 'ml-engine')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'apps', 'ml-engine')))
 from dellmology.intelligence import llm_backend
 
 # (No in-script env modifications or debug logging by default)
