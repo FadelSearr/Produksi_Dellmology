@@ -2630,6 +2630,35 @@ function LeftSidebar({
     onWatchlistUpdate(watchlist);
   }, [onWatchlistUpdate, watchlist]);
 
+  // Enrich watchlist with Unified Power values from backend
+  useEffect(() => {
+    let cancelled = false;
+    const enrich = async () => {
+      if (!watchlist || watchlist.length === 0) return;
+      try {
+        const body = { entries: watchlist.map((w) => ({ symbol: w.symbol, score: w.score })) };
+        const r = await fetch('/api/ai/watchlist/unified_power', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (cancelled) return;
+        const mapping: Record<string, number> = data.mapping || {};
+        const enriched = watchlist.map((w) => ({ ...w, unified_power: mapping[w.symbol] ?? w.score }));
+        setWatchlist(enriched);
+      } catch (err) {
+        // best-effort: ignore enrichment failures
+        // console.error('Failed to fetch unified power', err);
+      }
+    };
+    void enrich();
+    return () => {
+      cancelled = true;
+    };
+  }, [watchlist]);
+
   const watchlistScores = watchlist
     .map((item) => Number(item.score || 0))
     .filter((value) => Number.isFinite(value));
@@ -2856,28 +2885,40 @@ function LeftSidebar({
                 <span className="text-xs font-mono text-slate-300">{item.price.toLocaleString()}</span>
                 <div className="flex items-center space-x-1 mt-1">
                   <span className="text-[9px] text-slate-500">PWR</span>
-                  <span
-                    className={cn(
-                      'text-[9px] px-1 py-0.5 rounded font-mono border',
-                      item.score > 70
-                        ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
-                        : item.score > 40
-                          ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
-                          : 'text-rose-300 border-rose-500/40 bg-rose-500/10',
-                    )}
-                    title="Unified Power Score"
-                  >
-                    {`${Math.round(item.score)}/100`}
-                  </span>
-                  <div className="w-12 h-1 bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className={cn('h-full rounded-full', item.score > 70 ? 'bg-emerald-500' : item.score > 40 ? 'bg-amber-500' : 'bg-rose-500')}
-                      style={{ width: `${item.score}%` }}
-                    />
-                  </div>
+                  {
+                    (() => {
+                      const ups = Number.isFinite(Number(item.unified_power)) ? Number(item.unified_power) : Number(item.score || 0);
+                      return (
+                        <>
+                          <span
+                            className={cn(
+                              'text-[9px] px-1 py-0.5 rounded font-mono border',
+                              ups > 70
+                                ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
+                                : ups > 40
+                                  ? 'text-amber-300 border-amber-500/40 bg-amber-500/10'
+                                  : 'text-rose-300 border-rose-500/40 bg-rose-500/10',
+                            )}
+                            title="Unified Power Score"
+                          >
+                            {`${Math.round(ups)}/100`}
+                          </span>
+                          <div className="w-12 h-1 bg-slate-800 rounded-full overflow-hidden">
+                            <div
+                              className={cn('h-full rounded-full', ups > 70 ? 'bg-emerald-500' : ups > 40 ? 'bg-amber-500' : 'bg-rose-500')}
+                              style={{ width: `${Math.max(0, Math.min(100, ups))}%` }}
+                            />
+                          </div>
+                        </>
+                      );
+                    })()
+                  }
                 </div>
                 <div className="text-[9px] text-slate-500 font-mono mt-0.5">
-                  {item.score >= 85 ? 'Strong Buy' : item.score >= 65 ? 'Buy Bias' : item.score >= 45 ? 'Neutral' : 'Sell Risk'}
+                  {(() => {
+                    const ups = Number.isFinite(Number(item.unified_power)) ? Number(item.unified_power) : Number(item.score || 0);
+                    return ups >= 85 ? 'Strong Buy' : ups >= 65 ? 'Buy Bias' : ups >= 45 ? 'Neutral' : 'Sell Risk';
+                  })()}
                 </div>
               </div>
             </div>

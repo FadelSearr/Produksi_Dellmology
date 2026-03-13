@@ -98,6 +98,16 @@ class Config:
     # Scheduler Settings
     RETRAIN_SCHEDULE = os.getenv('RETRAIN_SCHEDULE', '0 17 * * 1-5')  # 5 PM weekdays
     DATA_RETENTION_DAYS = int(os.getenv('DATA_RETENTION_DAYS', 7))
+
+    # LLM / AI integration settings
+    LLM_ENABLED = os.getenv('LLM_ENABLED', 'false').lower() in ('1', 'true', 'yes')
+    LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'openai')  # 'openai', 'local', 'mock'
+    LLM_API_KEY = os.getenv('LLM_API_KEY', '')
+    LLM_ENDPOINT = os.getenv('LLM_ENDPOINT', '')  # optional custom endpoint
+    LLM_TIMEOUT = int(os.getenv('LLM_TIMEOUT', '8'))  # seconds
+    # Whether to attempt preloading a local model on application startup.
+    # Defaults to false to avoid blocking startup when large GGUF models are present.
+    LLM_PRELOAD_ON_STARTUP = os.getenv('LLM_PRELOAD_ON_STARTUP', 'false').lower() in ('1', 'true', 'yes')
     
     @classmethod
     def to_dict(cls) -> Dict[str, Any]:

@@ -57,9 +57,25 @@ from dellmology.utils.db_utils import (
     fetch_anomalies,
 )
 
-import redis
 import json
 import time
+
+# Redis is optional; avoid importing at module import time to keep pytest/CI stable
+redis_client = None
+
+def _ensure_redis():
+    global redis_client
+    if redis_client is not None:
+        return
+    try:
+        import redis as _redis
+        rc = _redis.Redis(host="localhost", port=6379, db=2)
+        rc.ping()
+        redis_client = rc
+        logger.info("Redis connected for screener cache")
+    except Exception as e:
+        redis_client = None
+        logger.warning(f"Redis not available for screener: {e}")
 
 logger = logging.getLogger(__name__)
 
@@ -73,17 +89,10 @@ try:
 except Exception as e:
     logger.warning(f"Database init failed: {e}, will use fallback mock data")
 
-# redis cache client (optional)
-try:
-    redis_client = redis.Redis(host='localhost', port=6379, db=2)
-    redis_client.ping()
-    logging.info("Redis connected for screener cache")
-except Exception as e:
-    redis_client = None
-    logging.warning(f"Redis not available for screener: {e}")
 
 
 def cache_get(key: str):
+    _ensure_redis()
     if not redis_client:
         return None
     val = redis_client.get(key)
@@ -93,6 +102,7 @@ def cache_get(key: str):
 
 
 def cache_set(key: str, value, ttl: int = 30):
+    _ensure_redis()
     if not redis_client:
         return
     redis_client.setex(key, ttl, json.dumps(value))
@@ -122,6 +132,7 @@ class ScreeningRequest(BaseModel):
     min_score: float = 0.6
     symbols: Optional[List[str]] = None
     include_analysis: bool = True
+    use_llm: bool = False
 
 
 class StockScoreResponse(BaseModel):
@@ -247,7 +258,7 @@ async def run_screening(request: ScreeningRequest, _=Depends(rate_limit_dep)):
                     "stats": stats,
                     "top_pick": response_results[0] if response_results else None,
                     "results": [r.model_dump() for r in response_results],
-                }, symbol=response_results[0].symbol if response_results else None)
+                }, symbol=response_results[0].symbol if response_results else None, use_llm=request.use_llm)
             except Exception as ex:
                 logger.warning(f"AI narrative generation failed: {ex}")
                 ai_text = None
